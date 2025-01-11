@@ -7,13 +7,13 @@ from typing import Optional
 import re
 import random
 import types
-import asyncio
 import datetime as datetime_module  # stupid aspect of datetime being also an object
 from datetime import datetime, timezone, timedelta
 
 from params import *
 from rank_grant import *
 from embed_maker import *
+from showcase import *
 from exhibition import *
 from thread_auto_manage import *
 from hall_of_fame import *
@@ -45,34 +45,6 @@ async def sides(interaction: discord.Interaction, player_one: str, player_two: s
          '<:united_states:660218154160619533>'],
     ]
     await interaction.response.send_message('\n'.join(a + b for a, b in zip(game_sides[g], players)))
-
-
-@tree.command(description="Moves showcase channel between cache and main category")
-@app_commands.checks.has_role(STAFF_ROLE_ID)
-@app_commands.checks.bot_has_permissions(manage_channels=True)
-async def toggle_showcase(interaction: discord.Interaction):
-    showcase_dict = SHOWCASE_CHANNELS.get(interaction.channel_id)
-    if not showcase_dict:
-        await interaction.response.send_message("Must be in a showcase channel.", ephemeral=True)
-        return
-    else:
-        showcase = interaction.guild.get_channel(interaction.channel_id)
-        gallery = interaction.guild.get_channel(showcase_dict['gallery'])
-        active = interaction.guild.get_channel(showcase_dict['active'])
-        archive = interaction.guild.get_channel(ARCHIVE_CATEGORY)
-        if not showcase or not active or not archive or not active.type == discord.ChannelType.category or not archive.type == discord.ChannelType.category:
-            await interaction.response.send_message("Invalid data stored for showcase channel.", ephemeral=True)
-            return
-        if showcase.category == archive:
-            if gallery:
-                await gallery.edit(category=active)
-            await showcase.edit(category=active)
-            await interaction.response.send_message("Moved channel to active category!", ephemeral=True)
-        else:
-            if gallery:
-                await gallery.edit(category=archive)
-            await showcase.edit(category=archive)
-            await interaction.response.send_message("Moved channel to archive category!", ephemeral=True)
 
 
 @tree.command(description="Ping all non-Staff, non-bot members who don't have Commanders role.")
@@ -110,6 +82,52 @@ async def list_non_commanders_mem_pings(interaction: discord.Interaction, limit:
     await interaction.response.send_message(header + report)
 
 
+class ConfirmDefaultsView(discord.ui.View):
+    temp = None  # stores generated temp role; useful if execution is interrupted yet bot is not restarted
+
+    def __init__(self, ch_list: list):
+        super().__init__()
+        self.ch_list = ch_list
+
+    @discord.ui.button(
+        label="Begin",
+        style=discord.ButtonStyle.primary
+    )
+    async def button_callback(self, interaction: discord.Interaction, button):
+        await interaction.response.defer()
+        button.disabled = True
+        await interaction.followup.edit_message(interaction.message.id, view=self)
+        interaction_channel = interaction.channel
+        if not type(self).temp or type(self).temp not in interaction.guild.roles:
+            type(self).temp = await interaction.guild.create_role(name="temp", reason="/push_channels_as_default")
+        for ch in self.ch_list:
+            await ch.set_permissions(interaction.guild.default_role, read_messages=False)
+            await ch.set_permissions(type(self).temp, read_messages=True)
+        
+        templess_mems = [mem for mem in interaction.guild.members if type(self).temp not in mem.roles]
+        mem_count = len(interaction.guild.members)
+        init_count = mem_count - len(templess_mems)
+        init_tenth = init_count * 10 // mem_count
+
+        def prog_str(tenth):
+            return f"Channels to publish have been set private. Now assigning temp role to all server members.\nProgress:\n\n{'O ' * tenth + '- ' * (10 - tenth)}{tenth}/10"
+        prog_msg = await interaction.followup.send(prog_str(init_tenth), wait=True)
+
+        async def long_add_temp(count, tenth):
+            for mem in templess_mems:
+                await mem.add_roles(type(self).temp)
+                count += 1
+                if count >= mem_count*(tenth+1)/10:
+                    tenth += 1
+                    await prog_msg.edit(content=prog_str(tenth))
+            for ch in self.ch_list:
+                await ch.set_permissions(interaction.guild.default_role, read_messages=True)
+            await type(self).temp.delete(reason="/push_channels_as_default")
+            await interaction_channel.send("Channels should now be public and temp role deleted. Onboarding default for these channels should now be checked for each and every existing member!")
+
+        asyncio.create_task(long_add_temp(init_count, init_tenth))
+
+
 @tree.command(description="Uses trick to fix Discord's broken Onboarding and push show channel setting onto users")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.bot_has_permissions(manage_channels=True)
@@ -117,52 +135,20 @@ async def list_non_commanders_mem_pings(interaction: discord.Interaction, limit:
     channel_ids='IDs or #mentions of channels or categories for Onboarding correction'
 )
 async def push_channels_as_default(interaction: discord.Interaction, channel_ids: str):
-    class ConfirmDefaultsView(discord.ui.View):
-        def __init__(self, ch_list: list):
-            super().__init__()
-            self.ch_list = ch_list
-
-        @discord.ui.button(
-            label="Begin",
-            style=discord.ButtonStyle.primary
-        )
-        async def button_callback(self, interaction: discord.Interaction, button):
-            await interaction.response.defer()
-            temp = await interaction.guild.create_role(name="temp", reason="/push_channels_as_default")
-            for ch in self.ch_list:
-                await ch.set_permissions(interaction.guild.default_role, read_messages=False)
-                await ch.set_permissions(temp, read_messages=True)
-            count = 0
-            tenth = 0
-
-            def prog_str():
-                return f"Channels to publish have been set private. Now assigning temp role to all server members.\nProgress:\n\n{'O ' * tenth + '- ' * (10 - tenth)}{tenth}/10"
-            prog_msg = await interaction.followup.send(prog_str(), wait=True)
-            for mem in interaction.guild.members:
-                await mem.add_roles(temp)
-                count += 1
-                if count >= len(interaction.guild.members)*(tenth+1)/10:
-                    tenth += 1
-                    await prog_msg.edit(content=prog_str())
-            for ch in self.ch_list:
-                await ch.set_permissions(interaction.guild.default_role, read_messages=True)
-            await temp.delete(reason="/push_channels_as_default")
-            await interaction.followup.send("Channels should now be public and temp role deleted. Onboarding default for these channels should now be checked for each and every existing member!")
-
     ch_ids = re.findall(r"(\d+)", channel_ids)
     good_chs = []
     bad_chs = ""
     categories_note = ""
     for c_id in ch_ids:
         ch = interaction.guild.get_channel(int(c_id))
-        if not ch or ch.type not in [discord.ChannelType.text, discord.ChannelType.category]:
+        if not ch or ch.type not in [discord.ChannelType.text, discord.ChannelType.forum, discord.ChannelType.category]:
             bad_chs += "\n" + c_id
             continue
         else:
             if ch.type == discord.ChannelType.category:
                 categories_note = "\n\nThis will NOT correct members' default setting of categories, even if that is checked in server settings Onboarding. It will just apply this correction to ***SYNCED*** channels within the category. In other words, you still need to call this command whenever new channels are added to a category (or uncategorized for that matter) in the future."
             good_chs.append(ch)
-    msg = ("First of all, be sure to set the channels as default in the server settings -> Onboarding so that ***FUTURE*** new members from now on can see them. If you don't do this, those future members will still have problems."
+    msg = ("First of all, be sure to set the channels as default in the server settings -> Onboarding -> Default Channels (as distinct from your personal Browse Channels!) so that ***FUTURE*** new members from now on can see them. If you don't do this, those future members will still have problems."
            + categories_note
            + "\n\nThis operation may take a while, proportional to how many members are in the server. The channels will be hidden for at least some members until it's over."
            + ("\n\nSome channel IDs were invalid and will not be processed if you proceed:" if bad_chs else "") + bad_chs)
@@ -185,6 +171,8 @@ last_msgs = {}
 @bot.event
 async def on_message(message: discord.Message):
     await message_checks(message)
+
+    shake_thread_on_msg(message)
 
     channel_id = message.channel.id
 

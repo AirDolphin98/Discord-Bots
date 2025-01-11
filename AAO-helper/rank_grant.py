@@ -95,14 +95,16 @@ def expiry_back(role_id: int, current_season: int) -> int:
         return current_season - MEDAL_TIME
 
 
-async def delete_rank(guild, time_added: float, user_id: int, rank: str, commits=True):
+async def delete_rank(guild: discord.Guild, time_added: float, user_id: int, rank: str, commits=True):
     cur.execute(
         "DELETE FROM ranks_added WHERE time_added = ?",
         (time_added,)
     )
     if commits:
         conn.commit()  # conditional, for faster performance in loop
-    role = guild.get_role(RANK_ID_DICT[rank])
+
+    rank_id = RANK_ID_DICT.get(rank)
+    role = guild.get_role(rank_id) if rank_id else None
     user = guild.get_member(user_id)
     if role and user:
         cur.execute(
@@ -115,7 +117,14 @@ async def delete_rank(guild, time_added: float, user_id: int, rank: str, commits
         if legacy:
             await user.add_roles(guild.get_role(legacy))
     else:
-        await guild.get_channel_or_thread(SERVER_COMM_CH).send(f"ROLE NOT FOUND IN PROGRAM: {rank}")
+        err_msg = "Unable to remove role:\n"
+        if not rank_id:
+            err_msg += f"Rank not found in bot program dictionary: {rank}\n"
+        elif not role:
+            err_msg += f"Role not found in server: {rank_id} ({rank})\n"
+        if not user:
+            err_msg += f"User not found in server: {user_id}\n"
+        await guild.get_channel_or_thread(SERVER_COMM_CH).send(err_msg)
 
 
 async def add_record(interaction: discord.Interaction, time_added: float, user_id: int, role_id: int, season_num: int,
@@ -238,13 +247,13 @@ async def add_record(interaction: discord.Interaction, time_added: float, user_i
         r, s_n, n = entry
         info_str += f"\n\nRank: {r}\nExpires: {SEASON_START_WEEKS} weeks after end of S{expiry(r, s_n)}\nNote: {n}"
 
+    result_print = f"{confirm_str}User's ranks recorded:\n\nUser: {interaction.guild.get_member(user_id).display_name}{info_str}"
+
     server_comm_ch = interaction.guild.get_channel_or_thread(SERVER_COMM_CH)
     if server_comm_ch:
-        await server_comm_ch.send(f"{confirm_str}User's ranks recorded:\n\nUser: {interaction.guild.get_member(user_id).display_name}{info_str}")
-    else:
-        await interaction.followup.send(
-            f"{confirm_str}User's ranks recorded:\n\nUser: {interaction.guild.get_member(user_id).display_name}{info_str}",
-            ephemeral=True)
+        await server_comm_ch.send(result_print)
+    if interaction.channel_id != SERVER_COMM_CH:
+        await interaction.followup.send(result_print, ephemeral=True)
 
 
 async def add_records(interaction: discord.Interaction, rows: list[tuple[float, int, int, int, str]], current_season_num: int, end_timestamp: float):
@@ -400,8 +409,11 @@ def season_select_options(season_num: int) -> list[discord.SelectOption]:
         for x in range(1, TOP_TIME + 1)]
 
 
+pressed_ranks = {}
+
+
 class GrantRankView(discord.ui.View):
-    def __init__(self, user: discord.Member, role_id: int) -> None:
+    def __init__(self, user: discord.Member, role_id: int, react_msg_id = None) -> None:
         super().__init__()
         self.time_added = datetime.timestamp(datetime.now(timezone.utc))
         self.user = user
@@ -409,6 +421,7 @@ class GrantRankView(discord.ui.View):
         current_end = cur.fetchone()
         self.seasonNum = current_end[0] if current_end else None
         self.role_id = role_id
+        self.react_msg_id = react_msg_id
         self.note = ""
 
         self.select = discord.ui.Select(
@@ -435,6 +448,8 @@ class GrantRankView(discord.ui.View):
     )
     async def button_callback_1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await add_record(interaction, self.time_added, self.user.id, self.role_id, self.seasonNum, self.note)
+        if self.react_msg_id:
+            pressed_ranks[self.react_msg_id] = RANK_DICT[self.role_id]
 
     @discord.ui.button(
         row=1,
@@ -553,6 +568,7 @@ async def grant_rank(interaction: discord.Interaction, user_id: str, rank: app_c
             return
         time_added = datetime.timestamp(datetime.now(timezone.utc))
         await add_record(interaction, time_added, int(u_id), int(rank.value), season_num, note)
+        await interaction.followup.send(f"Finished executing `/{interaction.command.name}`", ephemeral=True)
 
 
 @tree.command(description="Show current season end date and time")
@@ -570,7 +586,7 @@ async def get_season_end(interaction: discord.Interaction):
     await interaction.response.send_message(f"Current season set to S{season_num}, end set to {datetime.strftime(end_datetime, TIME_FORMAT)} UTC")
 
 
-OVERRIDE_CODE = "beamdog"
+OVERRIDE_CODE = "beamdog"  # not case-sensitive
 
 
 @tree.command(description="Edit current season end date and time")
@@ -597,7 +613,7 @@ async def set_season_end(interaction: discord.Interaction, season_num: int, end_
         current_end = cur.fetchone()
         if current_end:
             c_num, end_ts = current_end
-            if override_code != OVERRIDE_CODE:
+            if override_code.lower() != OVERRIDE_CODE.lower():
                 if timedelta(seconds=0.0) < datetime.now(timezone.utc) - datetime.fromtimestamp(end_ts, timezone.utc) < timedelta(weeks=SEASON_START_WEEKS):
                     await interaction.response.send_message(
                         f"Too early to update season. Wait until grace period of {SEASON_START_WEEKS} weeks is over, or use override code.",
@@ -812,18 +828,22 @@ async def rank_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.member.get_role(STAFF_ROLE_ID):
         guild = bot.get_guild(payload.guild_id)
         author = guild.get_member(payload.message_author_id)
-        if not author:
-            await guild.get_channel(SERVER_COMM_CH).send("Error: user not in server.")
-            return
         msg = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
+        if not author:
+            await guild.get_channel(SERVER_COMM_CH).send(f"A Staff member reacted to {msg.jump_url}\nError: user not in server.")
+            return
         rank_react_ls = [react for react in msg.reactions if isinstance(react.emoji, discord.Emoji) and react.emoji.id == payload.emoji.id]
         if rank_react_ls:
             rank_react = rank_react_ls[0]
-            staff_msg = f"{payload.member.mention} Select a season end for grant rank to user: {author.display_name}"
-            if [user async for user in rank_react.users() if guild.get_member(user.id) and user.get_role(STAFF_ROLE_ID) and user.id != payload.member.id]:
-                staff_msg = f"{payload.member.mention} A Staff member has already reacted to this post for user: {author.display_name}"
-            await guild.get_channel(SERVER_COMM_CH).send(content=staff_msg, view=GrantRankView(author, RANK_ID_DICT[
-                REACTION_DICT[payload.emoji.id]]))
+            rank_name = REACTION_DICT[payload.emoji.id]
+            rank_button = GrantRankView(author, RANK_ID_DICT[rank_name], msg.id)
+            staff_msg = f"{payload.member.mention} Select a season end for granting **{rank_name}** rank to user: {author.display_name}"
+            if pressed_ranks.get(msg.id) == rank_name:
+                staff_msg = f"{msg.jump_url} A Staff member has already pressed the button to grant **{rank_name}** rank to user: {author.display_name}\nIf something's not right, use slash command `/show_user_ranks` to delete the record, and `/grant_rank` to replace it."
+                rank_button = None
+            elif [user async for user in rank_react.users() if guild.get_member(user.id) and user.get_role(STAFF_ROLE_ID) and user.id != payload.member.id]:
+                staff_msg = f"{payload.member.mention} A Staff member has already reacted with **{rank_name}** for user: {author.display_name}\nHowever, they might not have pressed the button to grant the rank yet. (Or maybe they did, but the bot was later reset.)"
+            await guild.get_channel(SERVER_COMM_CH).send(content=staff_msg, view=rank_button)
 
 
 async def clean_member_roles(member: discord.Member):

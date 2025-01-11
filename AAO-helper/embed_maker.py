@@ -41,6 +41,11 @@ class CreateEmbedModal(discord.ui.Modal):
         try:
             if self.message:
                 await self.message.edit(embed=embed)
+                if self.message.edited_at:
+                    if datetime.now(timezone.utc) - self.message.edited_at > timedelta(days=1.0):
+                        await interaction.guild.get_channel_or_thread(SERVER_COMM_CH).send(f"An embed edited more than a day ago was edited again: {self.message.jump_url}")
+                elif datetime.now(timezone.utc) - self.message.created_at > timedelta(days=1.0):
+                    await interaction.guild.get_channel_or_thread(SERVER_COMM_CH).send(f"An embed older than a day was edited: {self.message.jump_url}")
             else:
                 await interaction.channel.send(embed=embed)
         except discord.errors.HTTPException as e:
@@ -76,9 +81,7 @@ async def edit_embed(interaction: discord.Interaction, message: discord.Message)
         color = f'{embed.color.value:06x}' if embed.color else None
         image = embed.image.url if embed.image else None
         await interaction.response.send_modal(CreateEmbedModal(vals=(title, description, footer, color, image), message=message))
-        if datetime.now(timezone.utc) - message.created_at > timedelta(days=1.0):
-            await interaction.guild.get_channel_or_thread(SERVER_COMM_CH).send(f"An embed older than a day was edited: {message.jump_url}")
-
+        
 
 tree.add_command(edit_embed)
 

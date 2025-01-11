@@ -634,6 +634,11 @@ async def usage_dump(ctx):
 
 
 @bot.event
+async def on_member_join(member: discord.Member):
+    await member.add_roles(member.guild.get_role(793741327874654219), member.guild.get_role(810822847622021132)) # Wisp, QOTD
+
+
+@bot.event
 async def on_member_update(before, after): #for spam accounts joining in Soul Sanctum
     roles_set = set([r.id for r in after.roles])
     sus_colors = {797228323192700948, 797227641794461716, 797219806574149672, 804928191315705868, 797220234012262460} #Light Slate Blue, Pig Pink, Electric Indigo, Dark Violet, Electric Purple

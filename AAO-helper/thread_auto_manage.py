@@ -5,20 +5,33 @@ from discord.ext import tasks
 from typing import Optional
 import datetime as datetime_module  # stupid aspect of datetime being also an object
 from datetime import datetime, timezone, timedelta
+import asyncio
 
 
 last_shaken = {}
 
 
-@tasks.loop(minutes=15.0)
+def shake_thread_on_msg(msg: discord.Message):
+    if msg.channel.type not in [discord.ChannelType.public_thread, discord.ChannelType.private_thread]:
+        return
+    cur.execute(
+        "SELECT * FROM threads_persist WHERE channelthread_id = ? OR channelthread_id = ?",
+        (msg.channel.id, msg.channel.parent_id)
+    )
+    if cur.fetchall():
+        last_shaken[msg.channel.id] = datetime.now(timezone.utc)
+
+
+@tasks.loop(minutes=5.0)
 @app_commands.checks.bot_has_permissions(manage_threads=True)
 async def unarchiver():
     async def shake_thread(thread: discord.Thread):
         aad = thread.auto_archive_duration
+        if datetime.now(timezone.utc) - last_shaken.get(thread.id, datetime.min.replace(tzinfo=timezone.utc)) < timedelta(minutes=aad):
+            return
         hist_last = [m async for m in thread.history(limit=1)]
         last_msg = hist_last[0] if hist_last else thread  # depends on both message and thread having created_at
-        if min(datetime.now(timezone.utc) - last_msg.created_at,
-               datetime.now(timezone.utc) - last_shaken.get(thread.id, datetime.min.replace(tzinfo=timezone.utc))) > timedelta(minutes=aad):
+        if datetime.now(timezone.utc) - last_msg.created_at > timedelta(minutes=aad):
             temp = 4320 if aad == 10080 else 10080
             await thread.edit(auto_archive_duration=temp)
             await thread.edit(auto_archive_duration=aad)
@@ -45,6 +58,8 @@ async def unarchiver():
 @unarchiver.before_loop
 async def before_unarchiver():
     await bot.wait_until_ready()
+    if not DEBUG:
+        await asyncio.sleep(900) # helps reduce spam in Discord's audit log, since last_shaken dict is empty when bot is restarted
 
 
 @tree.command(description="Toggles whether a thread or channel is kept unarchived")
@@ -72,8 +87,8 @@ async def auto_unarchive(interaction: discord.Interaction):
         await interaction.response.send_message("No longer thread-unarchiving automatically")
     else:
         cur.execute(
-            "INSERT INTO threads_persist (channelthread_id, last_active) VALUES ?",
-            (c_id, None)
+            "INSERT INTO threads_persist (channelthread_id) VALUES (?)",
+            (c_id,)
         )
         conn.commit()
         await interaction.response.send_message("Now thread-unarchiving automatically")
@@ -153,3 +168,27 @@ async def auto_close_forum_posts(interaction: discord.Interaction, forum_id: str
         await interaction.response.send_message(f"Now closing posts in {ch.mention} automatically{', with lock posts' if lock else ''}")
 
 
+@tree.command(description="Lists channels and threads set to auto unarchive, and forum channels set to auto close")
+@app_commands.checks.has_role(STAFF_ROLE_ID)
+async def list_auto_managed_channels(interaction: discord.Interaction):
+    cur.execute("SELECT channelthread_id FROM threads_persist")
+    threads = cur.fetchall()
+    cur.execute("SELECT forum_id, days_wait, lock FROM forum_posts_close")
+    forums = cur.fetchall()
+    msg = "Channels and threads set to auto unarchive:\n"
+    if threads:
+        for t in threads:
+            ch_th = interaction.guild.get_channel_or_thread(t[0])
+            if ch_th:
+                msg += f"{ch_th.mention}\n"
+    else:
+        msg += "*None*\n"
+    msg += "\nForum channels set to auto close:"
+    if forums:
+        for f in forums:
+            ch = interaction.guild.get_channel_or_thread(f[0])
+            if ch:
+                msg += f"\n{ch.mention} after {f[1]} days{' and lock' if f[2] else ''}"
+    else:
+        msg += "\n*None*"
+    await interaction.response.send_message(msg, ephemeral=True)
