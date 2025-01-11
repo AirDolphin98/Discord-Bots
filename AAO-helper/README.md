@@ -14,13 +14,17 @@ So far, these are the main functions of the bot:
 
 * Roll for sides (assign players to either Axis or Allies)
 
-* Move showcase channels and galleries between archive and main categories
-
 * Create and edit embed messages
+
+* Correct invisibility of newly created channels
+
+* Conveniently give showcase roles
+
+* Move showcase channels and galleries between archive and main categories
 
 * After inactivity, automatically unhide threads or archive forum posts
 
-* System that lets people give themselves Exhibition Match role
+* System that lets people give themselves exhibition match role
 
 * System for granting leaderboard rank badges, storing them in a database, and updating with the ranked seasons. This is the most sophisticated functionality.
 
@@ -60,7 +64,7 @@ The commands for roll sides and create/edit embed should be fairly self-explanat
 
 4. `list_non_commanders_mem_pings` Must have Manage Server permission to use. Can only use in #server-commands. Lists the pings of members (not Staff or bot) who for one reason or another do not have the Commanders role, which is supposed to be universal to non-Staff non-bot.
 
-5. `push_channels_as_default` Must have Manage Server permission to use. Basically always call this when creating new channels. Discord's Community Onboarding system has extremely unfortunate behavior for new channels in categories created after Onboarding was switched on, or without category. Anyone who doesn't have Show All Channels ticked (or who fiddles with Browse Channels which will untick Show All Channels) won't be able to see such new channels except via a random "suggested" tab, or by picking them in Browse Channels. This command performs a clever technique to force everyone to see the channels: create a temp role, private the channels to be only that role, give everyone the role (which may take a while), unprivate the channels and delete the role. Carefully read the messages sent by this command for more info.
+5. `push_channels_as_default` Must have Manage Server permission to use. Basically always call this when creating new channels. Discord's Community Onboarding system has extremely unfortunate behavior for new channels in categories created after Onboarding was switched on, or without category. Anyone who doesn't have Show All Channels ticked (or who fiddles with Browse Channels which will untick Show All Channels) won't be able to see such new channels except via a random "suggested" tab, or by picking them in Browse Channels. This command automatically performs a clever technique to force everyone to see the channels: create a temp role, private the channels to be only that role, give everyone the role (which may take a while), unprivate the channels and delete the role. Carefully read the messages sent by this command for more info.
 
 ### Showcase
 
