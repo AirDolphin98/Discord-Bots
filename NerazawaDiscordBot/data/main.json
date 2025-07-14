@@ -1,0 +1,209 @@
+{
+    "users": {
+        "969779384691093575": {
+            "unlocked_easter_eggs": [
+                {
+                    "egg_id": "4",
+                    "timestamp": 1752022136.525655
+                },
+                {
+                    "egg_id": "10",
+                    "timestamp": 1752187709.400651
+                },
+                {
+                    "egg_id": "15",
+                    "timestamp": 1752477258.083636
+                },
+                {
+                    "egg_id": "13",
+                    "timestamp": 1752477540.879021
+                },
+                {
+                    "egg_id": "14",
+                    "timestamp": 1752477567.709317
+                },
+                {
+                    "egg_id": "16",
+                    "timestamp": 1752480624.505958
+                },
+                {
+                    "egg_id": "17",
+                    "timestamp": 1752480725.346668
+                }
+            ],
+            "vc_durations": {
+                "1392769704271024190": {
+                    "longest_duration_seconds": 38.170192
+                }
+            },
+            "birthday": {
+                "day": null,
+                "month": null,
+                "timezone": null
+            },
+            "warnings": [
+                {
+                    "moderator_id": 969779384691093575,
+                    "message": "This is a test!!"
+                }
+            ]
+        },
+        "1284946570667626610": {
+            "unlocked_easter_eggs": [
+                {
+                    "egg_id": "6",
+                    "timestamp": 1752212170.026148
+                },
+                {
+                    "egg_id": "3",
+                    "timestamp": 1752357565.134408
+                }
+            ],
+            "vc_durations": {},
+            "birthday": {
+                "day": null,
+                "month": null,
+                "timezone": null
+            },
+            "warnings": []
+        },
+        "286634836444315648": {
+            "unlocked_easter_eggs": [
+                {
+                    "egg_id": "6",
+                    "timestamp": 1752363848.468982
+                }
+            ],
+            "vc_durations": {},
+            "birthday": {
+                "day": null,
+                "month": null,
+                "timezone": null
+            },
+            "warnings": []
+        }
+    },
+    "easter_eggs": {
+        "1": {
+            "type": "command",
+            "command": "/ping",
+            "title": "Ping Overload",
+            "description": "Tire out the bot from playing ping pong.",
+            "personalised_description": "Maybe relax with the ping pong, you've really worn me out."
+        },
+        "2": {
+            "type": "command",
+            "command": "/warn",
+            "title": "Easter Bunny Madness",
+            "description": "Warn the easter bunny for being naughty.",
+            "personalised_description": "Warn the Easter Bunny themself!"
+        },
+        "3": {
+            "type": "command",
+            "command": "/warn",
+            "title": "Corruption at the Top",
+            "description": "Warn Nerazawa for anything.",
+            "personalised_description": "Warn Nera?? Oh no there must be corruption up the top!"
+        },
+        "4": {
+            "type": "command",
+            "command": "/cleanup",
+            "title": "The Holy Number",
+            "description": "Cleanup 7 messages in any channel. 7 being an iconic symbol related to Easter.",
+            "personalised_description": "Get holy and find the symbolic number related to Easter!"
+        },
+        "5": {
+            "type": "command",
+            "command": "/countdown",
+            "title": "Easter Countdown",
+            "description": "Check the countdown on Easter.",
+            "personalised_description": "Check the countdown on Easter! The bunniest of days :D"
+        },
+        "6": {
+            "type": "command",
+            "command": "/wheretfami",
+            "title": "Lost Bunny",
+            "description": "Get so lost not even the bot can help find where you are.",
+            "personalised_description": "How did you even end up in that channel?! Even I'm confused..."
+        },
+        "7": {
+            "type": "command",
+            "command": "/wheretfami",
+            "title": "Lost Bunny",
+            "description": "Search for an `easter egg` in the `/quickjisho` command.",
+            "personalised_description": "Search `easter egg` in the `/quickjisho` command!"
+        },
+        "8": {
+            "type": "reaction",
+            "reaction": "\u00f0\u0178\u00a5\u0161",
+            "title": "Looks like an Egg to Me",
+            "description": "React with the egg emoji to one of the bot's daily bunny posts.",
+            "personalised_description": "React with an egg to one of the daily bunny posts!"
+        },
+        "9": {
+            "type": "command",
+            "command": "/embed",
+            "title": "Forgery!",
+            "description": "Create an embed mimicing the same title as these Easter Egg embeds.",
+            "personalised_description": "Trying to fake a Easter Egg embed, eh?"
+        },
+        "10": {
+            "type": "message",
+            "mentions": [
+                "The Ever Helpful Rabbit"
+            ],
+            "title": "You ain't my G.",
+            "description": "Try using one of the phrases AAphid uses to check if the bot is online.",
+            "personalised_description": "You think your Aaphid, hey? Not today bud."
+        },
+        "11": {
+            "type": "command",
+            "command": "/vcleaderboard",
+            "title": "Top 10 Talkers of All Time!",
+            "description": "Get into the top ten of the /vcleaderboard",
+            "personalised_description": "Whoa! You talk a lot in VC! Or you idle, I can't tell..."
+        },
+        "12": {
+            "type": "command",
+            "command": "/setbirthday",
+            "title": "Share a Birthday with Dev!",
+            "description": "Share a birthday with AAphid.",
+            "personalised_description": ":scream: AAAA You found the Dev's birthday!! Stop Stop!"
+        },
+        "13": {
+            "type": "command",
+            "command": "/credits",
+            "title": "Thank the bot!",
+            "description": "Supply `bot` as the `who_are_we_missing` argument.",
+            "personalised_description": "And I really appreciate you for thinking about me <3!"
+        },
+        "14": {
+            "type": "command",
+            "command": "/credits",
+            "title": "Admittance",
+            "description": "Supply `chatgpt` as the `who_are_we_missing` argument.",
+            "personalised_description": "Fineee a couple of things may have had the help of ChatGPT."
+        },
+        "15": {
+            "type": "command",
+            "command": "/todaysbunny",
+            "title": "WTF IS THAT",
+            "description": "Get the 1 in 500 chance of today's bunny being cursed.",
+            "personalised_description": "EWWWW THAT'S NOT A BUNNY!?"
+        },
+        "16": {
+            "type": "command",
+            "command": "/timelord",
+            "title": "Fictional Fantasies",
+            "description": "Try checking the time of anime or isekai.",
+            "personalised_description": "I don't think anime is becoming real any time soon sorry.."
+        },
+        "17": {
+            "type": "command",
+            "command": "/userinfo",
+            "title": "It's hard to think of easter eggs..",
+            "description": "Find 420 or 69 in a user's ID.",
+            "personalised_description": "Haha funny number haha in the user's ID."
+        }
+    }
+}

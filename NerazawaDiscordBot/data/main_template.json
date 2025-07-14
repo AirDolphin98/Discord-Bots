@@ -1,0 +1,37 @@
+{
+    "users": {
+        "123": { // member.id or user.id
+            "unlocked_easter_eggs": [
+                {
+                    "egg_id": "1",
+                    "timestamp": "123456.78" // datetime.now().timestamp()
+                }
+            ],
+            "vc_durations": {
+                "123": { // channel.id
+                    "longest_duration_seconds": 123456.78
+                }
+            },
+            "birthday": {
+                "day": 12, // or null as default
+                "month": 1, // or null as default
+                "timezone": "Asia/Tokyo" // or null as default
+            },
+            "warnings": [
+                {
+                    "moderator_id":1234, 
+                    "message":"Stop being so goddamn cool!"
+                }
+            ]
+        }
+    },
+    "easter_eggs": {
+        "1": {
+            "type": "command",
+            "command": "/example",
+            "name": "The non-existent command",
+            "description": "Run a command that isn't documented on the bot.",
+            "personalised_description": "Be sneaky and try commands not found on the bot!"
+        }
+    }
+}

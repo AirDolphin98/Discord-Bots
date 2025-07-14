@@ -1,0 +1,7 @@
+env/
+a.py
+auth.json
+__pycache__/
+ideas.txt
+data/backups/
+temp_happy_bday_image.png
