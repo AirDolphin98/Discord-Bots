@@ -14,7 +14,11 @@ from jisho_api.word import Word
 from utils import JSONDatabase
 from pprint import pprint
 
-with open("auth.json") as auth, open("config.json") as config:
+def abs_path_of(filename: str):
+    # Assumes filename is a file in the same directory as this
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+
+with open(abs_path_of("auth.json")) as auth, open(abs_path_of("config.json")) as config:
     AUTH_CONFIG = json.load(auth)
     TOKEN: str = AUTH_CONFIG["bot_token"]
     del AUTH_CONFIG
@@ -433,7 +437,7 @@ def search_word(search_query: str, result: WordRequest) -> discord.Embed:
 def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
     data = result.dict()
 
-    with open("b.json", "w") as f:
+    with open(abs_path_of("b.json"), "w") as f:
         json.dump(data, f)
 
     # Levels (for description)
