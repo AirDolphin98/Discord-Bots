@@ -236,7 +236,7 @@ class JSONDatabase:
         tail_no_ext = os.path.splitext(tail)[0]
 
         # Backup Folder - ...\backups\YEAR-MONTH-DAY\
-        backup_folder = os.path.join(head, "backups", now.strftime("%Y-%m-%d"))
+        backup_folder = abs_path_of(os.path.join(head, "backups", now.strftime("%Y-%m-%d")))
         if not os.path.exists(backup_folder):
             os.makedirs(backup_folder, exist_ok=True)
 
@@ -274,6 +274,7 @@ class JSONDatabase:
         target_path = filepath if filepath else self.file_path
 
         head, _ = os.path.split(target_path) # type: ignore
+        head = abs_path_of(head)
         if not os.path.exists(head): # type: ignore
             os.makedirs(head, exist_ok=True)
 
