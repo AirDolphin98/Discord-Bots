@@ -299,7 +299,7 @@ async def credits(interaction: discord.Interaction, who_are_we_missing: str|None
     embed = discord.Embed(title=f"Credits", description=description, color=discord.Colour.blurple(), timestamp=datetime.now())
 
     embed.add_field(name="🧑‍💻👩‍💻 Programmers", value="Thank you to AAphid for being the core programmer and coding the main bot. \nA secondary thanks to AirDolphin98 for providing feedback and helping out further with the code!", inline=False)
-    embed.add_field(name="🗃️ Hosting", value="Thanks to AirDolphin98 for supplying hosting to the discord bot so that it can run actually run and exist!", inline=False)
+    embed.add_field(name="🗃️ Hosting", value="Thanks to AirDolphin98 for supplying hosting to the discord bot so that it can actually run and exist!", inline=False)
     embed.add_field(name="🐰 The Main Bunny", value="And finally of course thank you Nerazawa for inspiring this bot and creating the server!", inline=False)
     embed.add_field(name="✨ Inspiration", value="The QuickJisho command's look and feel was inspired by the [Kobota](https://top.gg/bot/251239170058616833) discord bot! \nThe Embed UI command was inspired by AirDolphin98's [aao-helper](https://github.com/AirDolphin98/aao-helper/blob/main/embed_maker.py)!", inline=False) 
     if hidden_field is not None:
