@@ -3,6 +3,11 @@ import json, os, pprint, discord
 from datetime import datetime
 
 
+def abs_path_of(filename: str):
+    # Assumes filename is a file in the same directory as this
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+
+
 class JSONDatabase:
     _instance = None
     file_path = None
@@ -15,7 +20,7 @@ class JSONDatabase:
         return cls._instance
 
     def _load(self, file_path):
-        with open(file_path, 'r') as f:
+        with open(abs_path_of(file_path), 'r') as f:
             self.data: dict = json.load(f)
             self.file_path = file_path
 
@@ -272,7 +277,7 @@ class JSONDatabase:
         if not os.path.exists(head): # type: ignore
             os.makedirs(head, exist_ok=True)
 
-        with open(target_path, "w", encoding="utf-8") as f: # type: ignore
+        with open(abs_path_of(target_path), "w", encoding="utf-8") as f: # type: ignore
             json.dump(self.data, f, indent=4)
 
         

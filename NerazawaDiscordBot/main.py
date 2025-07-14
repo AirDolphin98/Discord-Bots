@@ -11,12 +11,9 @@ from jisho_api.word.request import WordRequest
 from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
-from utils import JSONDatabase
+from utils import JSONDatabase, abs_path_of
 from pprint import pprint
 
-def abs_path_of(filename: str):
-    # Assumes filename is a file in the same directory as this
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
 
 with open(abs_path_of("auth.json")) as auth, open(abs_path_of("config.json")) as config:
     AUTH_CONFIG = json.load(auth)
