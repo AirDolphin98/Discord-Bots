@@ -140,7 +140,7 @@ async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Memb
     await bday_channel.send(file=image, embed=embed)
 
 async def check_bdays():
-    print("CHECKING BIRTHDAYS!")
+#    print("CHECKING BIRTHDAYS!")
     for user_id in DATABASE.users():
         exists, bday = DATABASE.get_birthday(user_id)
         
@@ -935,7 +935,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     we_have_there_start_time = member.id in member_vc_times.keys() 
 
     if entered_vc:
-        print(f"{member.name} entered VC at {timestamp}")
+#        print(f"{member.name} entered VC at {timestamp}")
         member_vc_times[member.id] = timestamp
     elif exited_vc and isinstance(before.channel, discord.VoiceChannel) and we_have_there_start_time: # Isinstance check is to stop type hinting error.
         start_time = member_vc_times[member.id]
@@ -943,7 +943,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         seconds_in_vc = difference.total_seconds()
         DATABASE.set_vc_duration(member.id, before.channel, seconds_in_vc)
         DATABASE.commit()
-        print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
+#        print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
 
 @bot.tree.command(name="vcleaderboard", description="Check out who spent the most time in VC!")
 async def vcleaderboard(interaction: discord.Interaction):

@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 def abs_path_of(filename: str):
-    # Assumes filename is a file in the same directory as this
+    """Assumes filename is a file/folder in the same directory as this"""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
 
 

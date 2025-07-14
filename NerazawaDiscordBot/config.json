@@ -1,5 +1,5 @@
 {
-    "database_path": "./data/main.json",
+    "database_path": "data/main.json",
     "max_jisho_results": 3,
     "staff_role": "Lop",
     "backups_config": {
