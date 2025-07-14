@@ -52,7 +52,7 @@ atexit.register(on_exit)
 @tasks.loop(hours=DATABASE_BACKUP_DELAY_HOURS)
 async def backup_task():
     now = datetime.now()
-    print(f"Creating backup! - {now}")
+    print(f"Nerazawa Bot: Creating backup! - {now}")
     DATABASE.backup()
 
 async def found_easter_egg(member: discord.User | discord.Member, *, easter_egg_id: str|int):
