@@ -1,5 +1,6 @@
 from __future__ import annotations # Allows type hinting classes that haven't been setup yet - Requires Python 3.7+
 import json, os, pprint, discord
+from enum import Enum
 from datetime import datetime
 
 
@@ -68,20 +69,53 @@ class JSONDatabase:
         """
         users = self.users()
         for u_id in users:
+            # Get user
             user = self.user(u_id)
+            
+            # UNLOCKED EASTER EGGS
             if "unlocked_easter_eggs" not in user.keys():
-                print("Added missing unlocked_easter_eggs key!")
+                print("Added missing `unlocked_easter_eggs` key!")
                 user["unlocked_easter_eggs"] = []
+            
+            # VC DURATIONS
             if "vc_durations" not in user.keys():
-                print("Added missing vc_durations key!")
+                print("Added missing `vc_durations` key!")
                 user["vc_durations"] = {}
+
+            for channel_id in user["vc_durations"].keys():
+                data: dict = user["vc_durations"][channel_id]
+                has_longest_duration_value = "longest_duration_seconds" in data.keys()
+                has_total_duration_value = "total_time_seconds" in data.keys()
+                if not has_longest_duration_value:
+                    print("Added missing `longest_duration_seconds` in `vc_durations`")
+                    if has_total_duration_value:
+                        data["longest_duration_seconds"] = data["total_time_seconds"] # Use total_time_seconds if we have that instead
+                    else:
+                        data["longest_duration_seconds"] = 0 # Don't have any VC data for this channel so we set as 0 
+
+                if not has_total_duration_value:
+                    print("Added missing `total_time_seconds` in `vc_durations`")
+                    if has_longest_duration_value:
+                        data["total_time_seconds"] = data["longest_duration_seconds"] # Use longest_duration_seconds if we have that instead
+                    else:
+                        data["total_time_seconds"] = 0 # Don't have any VC data for this channel so we set as 0
+                if has_longest_duration_value and has_total_duration_value:
+                    # Fix if total time is less than the longest recorded time because how tf would that work
+                    if data["total_time_seconds"] < data["longest_duration_seconds"]:
+                        print("Fixed `total_time_seconds` being less than `longest_duration_seconds`")
+                        data["total_time_seconds"] = data["longest_duration_seconds"]
+
+            # BIRTHDAY
             if "birthday" not in user.keys():
-                print("Added missing birthday key!")
+                print("Added missing `birthday` key!")
                 user["birthday"] = {"day": None, "month": None, "timezone": None}
+
+            # WARNINGS
             if "warnings" not in user.keys():
-                print("Added missing warnings key!")
+                print("Added missing `warnings` key!")
                 user["warnings"] = []
 
+            # Set user with fixed data - (will automatically use `set_users` as well)
             self.set_user(u_id, user)
             
     def easter_eggs(self) -> dict:
@@ -104,7 +138,7 @@ class JSONDatabase:
         user["unlocked_easter_eggs"] = unlocked_eggs
         self.set_user(user_id, user)
 
-    def _add_missing_vc_duration(self, user_id: int|str, channel_id: int|str):
+    def _add_missing_vc_duration_channel(self, user_id: int|str, channel_id: int|str):
         """
         Will add missing vc duration as -1 if missing in that channel.
         """
@@ -113,33 +147,37 @@ class JSONDatabase:
         vc_durations: dict = user["vc_durations"]
         if channel_id not in vc_durations.keys():
             vc_durations[channel_id] = {
-                "longest_duration_seconds": -1
+                "longest_duration_seconds": 0,
+                "total_time_seconds": 0
             }
             user["vc_durations"] = vc_durations
 
         self.set_user(user_id, user)
 
-    def get_vc_duration(self, user_id: int|str, channel_id: int|str) -> int|float:
+    def get_vc_duration(self, user_id: int|str, channel_id: int|str) -> dict[str, int|float]:
         """
-        Get VC duration of a specific user for a specific channel.
-        Returns `-1` if the user has not spent any time in that VC
+        Get total VC duration, and longest VC duration of a specific user for a specific channel.
         """
         user = self.user(user_id)
 
-        self._add_missing_vc_duration(user_id, channel_id)
+        self._add_missing_vc_duration_channel(user_id, channel_id)
 
-        return user["vc_durations"][channel_id]["longest_duration_seconds"]
+        return user["vc_durations"][channel_id]
 
-    def _override_vc_duration(self, user_id: int|str, channel_id: int|str, length_seconds: int|float):
+    def set_vc_duration(self, user_id: int|str, channel_id: int|str, length_seconds: int|float, add_to_total_time: bool=False):
         """
         Used to override `longest_duration_seconds` value.
+        Also adds `length_seconds` `total_time_seconds` value if `add_to_total_time` is True.
 
         Please use `set_vc_duration` instead so that it can check automatically if the length is longer.
         """
         user = self.user(user_id)
+        self._add_missing_vc_duration_channel(user_id, channel_id)
+        user = self.user(user_id)
 
-        self._add_missing_vc_duration(user_id, channel_id)
         user["vc_durations"][channel_id]["longest_duration_seconds"] = length_seconds
+        total_time_seconds = user["vc_durations"][channel_id]["total_time_seconds"] + length_seconds
+        user["vc_durations"][channel_id]["total_time_seconds"] = total_time_seconds
 
         self.set_user(user_id, user)
 
@@ -160,18 +198,6 @@ class JSONDatabase:
         user = self.user(user_id)
         return user["warnings"]
 
-    def set_vc_duration(self, user_id: int|str, channel: discord.VoiceChannel, length_seconds: int|float):
-        """
-        Will determine if value is larger than current time, and will update if required.
-        """
-        self._add_missing_vc_duration(user_id, channel.id)
-
-        longest_duration_secs = self.get_vc_duration(user_id, channel.id)
-        
-        if length_seconds > longest_duration_secs:
-            # New highscore of how long being in VC
-            self._override_vc_duration(user_id, channel.id, length_seconds)
-
     def set_birthday(self, user_id: int|str, day: int, month: int, timezone: str):
         user = self.user(user_id)
 
@@ -191,7 +217,7 @@ class JSONDatabase:
         return exists, user["birthday"]
 
 
-    def top_vc_duration(self, user_id: int|str) -> dict|None:
+    def top_vc_duration(self, user_id: int|str) -> dict:
         """
         Get the duration of the longest VC channel they have been in. Also returns user's channel.
         """
@@ -201,18 +227,38 @@ class JSONDatabase:
         try:
             channel_ids = self.user(user_id)["vc_durations"].keys()
             for c_id in channel_ids:
-                duration = self.get_vc_duration(user_id, c_id)
-                if duration > top_duration:
-                    top_duration = duration
+                data = self.get_vc_duration(user_id, c_id)
+                channel_top_duration = data["longest_duration_seconds"]
+                if channel_top_duration > top_duration:
+                    top_duration = channel_top_duration
                     top_channel_id = c_id
 
         except KeyError as e: # Shouldn't happen if `verify_users_database` was run at the start of the script!
-            print(f"[WARN] Error while finding top vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
+            print(f"[WARN] Error while finding *top* vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
 
         return {
             "found": top_duration != -1 and top_channel_id != -1,
             "duration": top_duration,
             "channel_id": top_channel_id
+        }
+    
+    def total_vc_duration(self, user_id: int|str) -> dict:
+        total_duration = -1
+
+        try:
+            channel_ids: str = self.user(user_id)["vc_durations"].keys()
+            for c_id in channel_ids:
+                data = self.get_vc_duration(user_id, c_id)
+                channel_total_duration = data["total_time_seconds"]
+                total_duration += channel_total_duration
+
+        except KeyError as e: # Shouldn't happen if `verify_users_database` was run at the start of the script!
+            print(f"[WARN] Error while finding *total* vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
+
+        return {
+            "found": total_duration != -1,
+            "duration": total_duration,
+            "channel_id": "Global"
         }
 
     def prettifier(self, dict_:None|dict=None):
@@ -333,7 +379,13 @@ class EasterEgg():
 
     def unlock(self, user_id):
         self.db.unlock_easter_egg(user_id, self.id, datetime.now().timestamp())
-        
+
+class VCStatType(Enum):
+    top = "top"
+    total = "total"
+
+    def __str__(self):
+        return self.value
 
 if __name__ == "__main__":
     db = JSONDatabase("data/main.json")

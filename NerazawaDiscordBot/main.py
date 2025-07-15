@@ -1,17 +1,17 @@
-import discord, json, random, requests, pytz, os, atexit, modals
+import discord, json, random, requests, pytz, os, atexit, modals, traceback, datetime as dt
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import Intents, app_commands
 from discord.ext import commands, tasks
 from collections import defaultdict
 from bs4 import BeautifulSoup, Tag
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 from jisho_api.kanji.request import KanjiRequest
 from jisho_api.word.request import WordRequest
 from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
-from utils import JSONDatabase, abs_path_of
+from utils import JSONDatabase, abs_path_of, VCStatType
 from pprint import pprint
 
 
@@ -38,21 +38,51 @@ intents = Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.voice_states = True
-# intents.members = True
+intents.members = True
 
 bot = commands.Bot(intents=intents, command_prefix="/")
+
+member_vc_times: dict[int, dict] = {
+    # MEMBER_ID: {
+    #   "start_time": StartTimeDateTime,
+    #   "channel_id": INT,
+}
+def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bool=False) -> tuple|None:
+    global member_vc_times
+    timestamp = datetime.now(dt.timezone.utc)
+
+    member_ids = member_vc_times.copy().keys() # To stop `RuntimeError: dictionary keys changed during iteration`
+    if specific_member_id:
+        member_id = [specific_member_id]
+    for member_id in member_ids:
+
+        data = member_vc_times.pop(member_id)
+        start_time: datetime = data["start_time"]
+        channel_id: int = data["channel_id"]
+        
+        difference = timestamp - start_time
+        seconds_in_vc = difference.total_seconds()
+        DATABASE.set_vc_duration(member_id, channel_id, seconds_in_vc)
+        DATABASE.commit()
+        
+        if not remove_from_dict:
+            # Re-add member id since we popped it previously - but using the new timestamp
+            member_vc_times[member_id] = {"start_time":timestamp, "channel_id":channel_id}
+        if specific_member_id:
+            return difference, seconds_in_vc
 
 def on_exit():
     """Please don't ever save corrupted data please programmer gods 🙏🙏"""
     DATABASE.commit()
+    update_vc_times(remove_from_dict=True) # Assume they left the VC since the bot has exited and we can't keep tracking them
     # backup_task.stop()
 
 atexit.register(on_exit)
 
-@tasks.loop(hours=DATABASE_BACKUP_DELAY_HOURS)
 async def backup_task():
-    now = datetime.now()
+    now = datetime.now(dt.timezone.utc)
     print(f"Nerazawa Bot: Creating backup! - {now}")
+    update_vc_times(remove_from_dict=False) # Bot still online so we can let there times continue - so don't remove
     DATABASE.backup()
 
 async def found_easter_egg(member: discord.User | discord.Member, *, easter_egg_id: str|int):
@@ -90,26 +120,28 @@ async def command_error(reason: str, *, interaction: discord.Interaction, follow
     embed.add_field(name="Reason", value=reason)
 
     if followup:
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     else:
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Member|discord.User):#, message: str):
     embed = discord.Embed(
-        title=f"Happy Birthday {member.display_name.capitalize()}!", 
+        title=f"Happy Birthday {member.display_name.title()}!", 
         description=f"Since you set your birthday <@{member.id}>, we all wanted to wish you a happy birthday!",
         colour=discord.Colour.dark_magenta()
     )
 
-    # path = os.path.abspath("./happy_bday_nera_image.png")
-    path = os.path.abspath("./happy_bday_everyone_else_image.png")
+    path = abs_path_of("./happy_bday_everyone_else_image.png")
 
     overide_with_username = member.name.lower() != "nerazawa"
 
     if overide_with_username:
         img = Image.open(path)
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype("arial.ttf", size=50) 
+        try:
+            font = ImageFont.truetype("arial.ttf", size=50)
+        except OSError:
+            font = ImageFont.load_default(size=50)
         
         text = f"{member.name}"
         
@@ -121,6 +153,8 @@ async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Memb
         draw.text((center_x, 420), text, (0,0,0), font=font)
         path = os.path.abspath("./temp_happy_bday_image.png")
         img.save(path)
+    else:
+        path = os.path.abspath("./happy_bday_nera_image.png")
     
     try:
         image = discord.File(path, "image.png")
@@ -138,6 +172,9 @@ async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Memb
     # embed.add_field(name="Message", value=message)
 
     await bday_channel.send(file=image, embed=embed)
+
+    if overide_with_username: # Should be temp file
+        os.remove(path)
 
 async def check_bdays():
 #    print("CHECKING BIRTHDAYS!")
@@ -162,33 +199,47 @@ async def check_bdays():
             else:
                 print("Given birthday channel must be a Text Channel!!!")
 
+async def add_missing_vc_people():
+    all_members = bot.get_all_members() # Gets in all guilds as well - but shouldn't matter as it should only be in one server
+    timestamp = datetime.now(dt.timezone.utc)
+    for member in all_members:
+        if isinstance(member.voice, discord.VoiceState) and isinstance(member.voice.channel, discord.VoiceChannel):
+            print("Added missing member in VC:", member.name)
+            member_vc_times[member.id] = {
+                "start_time": timestamp,
+                "channel_id": member.voice.channel.id
+            }
+
 @bot.event
 async def on_ready():
 
     await bot.tree.sync() # Sync tree command structure
 
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="to Nera's torment as she tries to use me"))
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="the screams of the damned"))
 
     print(f"[GREEN]Logged in as {bot.user}")
     
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
+    scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
     scheduler.start()
     print("Scheduler setup!")
 
     await check_bdays()
-
-    await backup_task.start() # Start backup of database task - NOTE: Will block everything under it - in the function
+    await add_missing_vc_people()
+    await backup_task()
 
     
 
 ping_counter = 0
+tired_ping_amt = random.randint(5, 7)
 @bot.tree.command(name="ping", description="Check if bot is online and working.")
 async def ping(interaction: discord.Interaction):
-    global ping_counter
+    global ping_counter, tired_ping_amt
     ping_counter += 1
-    if ping_counter >= random.randint(5, 7):
+    if ping_counter >= tired_ping_amt:
         ping_counter = 0
+        tired_ping_amt = random.randint(5, 7)
         await interaction.response.send_message("Okay I'm getting tired can you stop..")
         await found_easter_egg(interaction.user, easter_egg_id=1)
         
@@ -221,7 +272,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
 
 @bot.tree.command(name="cleanup", description="Deletes up to 50 messages in this channel. Hard cap to prevent misuse.")
 @has_role(ADMIN_ROLE_NAME)
-@app_commands.checks.cooldown(1, 3)
+@app_commands.checks.cooldown(1, 3, key=lambda i: i.user.id)
 @app_commands.describe(
     amount="Amount of messages to delete in this channel.",
 )
@@ -245,7 +296,7 @@ async def cleanup(interaction: discord.Interaction, amount: int):
 target = datetime(2026, 12, 23, 12, 34, 20, 0)
 @bot.tree.command(name="countdown", description="How much time is left until the countdown finishes..")
 async def countdown(interaction: discord.Interaction):
-    right_now = datetime.now()
+    right_now = datetime.now(dt.timezone.utc)
     
     countdown = target - right_now
     
@@ -380,7 +431,10 @@ def search_word(search_query: str, result: WordRequest) -> discord.Embed:
         title=f"{search_query} (page 1 of 1)", url=f"https://jisho.org/search/{search_query.replace(' ', '%20')}",
         color=discord.Colour.green()
     )
-    
+
+    if not data["data"]:
+        return discord.Embed(title=f"{search_query} - No Results", description="Sorry my little dictionary doesn't know that word!", color=discord.Colour.green(), url=f"https://jisho.org/search/{search_query.replace(' ', '%20')}")
+
     for i, word_data in enumerate(data["data"]):
         if i > MAX_JISHO_RESULTS:
             break
@@ -389,7 +443,9 @@ def search_word(search_query: str, result: WordRequest) -> discord.Embed:
         words = word_data["japanese"]
         combined = defaultdict(set) # Cleaner than using {}
         for entry in words:
-            combined[entry['word']].add(entry['reading'])
+            # combined[entry['word']].add(entry['reading'])
+            combined[entry.get('word')].add(entry.get('reading'))
+
         for w in combined:
             readings: set | str = combined[w] # Can be a set of None if the word is katakana
             if readings == {None}:
@@ -433,9 +489,6 @@ def search_word(search_query: str, result: WordRequest) -> discord.Embed:
 
 def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
     data = result.dict()
-
-    with open(abs_path_of("b.json"), "w") as f:
-        json.dump(data, f)
 
     # Levels (for description)
     education_levels = data["data"]["meta"]["education"]
@@ -493,7 +546,7 @@ def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
             heading = f"{kanji} ({reading})"
             meanings = example["meanings"]
             examples_str += f"""{heading}\n{', '.join(meanings)}\n"""
-    examples_str.strip()
+    examples_str = examples_str.strip()
 
     embed.add_field(name="Examples", value=examples_str, inline=False)
 
@@ -546,7 +599,7 @@ async def quickjisho(interaction: discord.Interaction, word: str|None=None, kanj
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="todaysbunny", description="What is today's cutest bunny?")
-@app_commands.checks.cooldown(1, 5)
+@app_commands.checks.cooldown(1, 5, key=lambda i: i.user.id)
 async def todaysbunny(interaction: discord.Interaction):
     
     await interaction.response.defer()
@@ -560,30 +613,37 @@ async def todaysbunny(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
         return
     
-    response = requests.get("https://dailybunny.org/")
-    if not response.ok:
+    try:
+        response = requests.get("https://dailybunny.org/", timeout=5)
+        failed = not response.ok
+    except TimeoutError as e:
+        failed = True        
+
+    if failed:
         embed = discord.Embed(title="Daily Bunnies", color=discord.Colour.green(), description=f"Couldn't collect the bunny today (ó﹏ò｡)")
         await interaction.followup.send(embed=embed)
         return
 
-    html = response.content.decode()
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        html = response.text
+        soup = BeautifulSoup(html, "html.parser")
 
-    bunny_divs = soup.find_all(class_='excerpt-thumb')
-    todays_bunny_div = bunny_divs[0]
-    if isinstance(todays_bunny_div, Tag): # Type checking stuff
-        image = todays_bunny_div.find("img")
-        if isinstance(image, Tag): # Type checking stuff
-            if image.has_attr("data-src"):
-                src = image.attrs["data-src"]
+        bunny_divs = soup.find_all(class_='excerpt-thumb')
+        todays_bunny_div = bunny_divs[0]
+        if isinstance(todays_bunny_div, Tag): # Type checking stuff
+            image = todays_bunny_div.find("img")
+            if isinstance(image, Tag): # Type checking stuff
+                if image.has_attr("data-src"):
+                    src = image.attrs["data-src"]
 
-                embed = discord.Embed(title="Daily Bunnies", color=discord.Colour.green(), description=f"Today's cute little bunny is:")
-                embed.set_image(url=src)
-                embed.set_footer(text="Why are bunnies so cute?! (>〰<)♡")
+                    embed = discord.Embed(title="Daily Bunnies", color=discord.Colour.green(), description=f"Today's cute little bunny is:")
+                    embed.set_image(url=src)
+                    embed.set_footer(text="Why are bunnies so cute?! (>〰<)♡")
 
-                await interaction.followup.send(embed=embed)
-                return
-
+                    await interaction.followup.send(embed=embed)
+                    return
+    except Exception as e:
+        pass
     # If we get here something went wrong 
     embed = discord.Embed(title="Daily Bunnies", color=discord.Colour.green(), description=f"Couldn't collect the bunny today (ó﹏ò｡)")
     await interaction.followup.send(embed=embed)
@@ -604,8 +664,7 @@ async def embedui(interaction: discord.Interaction, include_images: bool, includ
         steps.append("fields")
 
     async def create_embed(interaction: discord.Interaction, data: dict):
-        print("Final data:", data)
-        if data["title"] == "🐣 Easter egg found!":
+        if data.get("title", "").strip().lower() == "🐣 easter egg found!":
             await found_easter_egg(interaction.user, easter_egg_id=9)
 
         embed = discord.Embed(
@@ -701,10 +760,14 @@ async def embed_(
 
     ):
 
-    if title == "🐣 Easter egg found!":
+    if title.strip().lower() == "🐣 easter egg found!":
         await found_easter_egg(interaction.user, easter_egg_id=9)
 
-    hex_colour = int(color.lstrip("#"), base=16)
+    try:
+        hex_colour = int(color.lstrip("#"), base=16)
+    except ValueError:
+        await command_error("Invalid HEX value given! Format like: #000000", interaction=interaction)
+        return        
 
     embed = discord.Embed(
         title=title,
@@ -743,11 +806,21 @@ async def embed_(
 
     await interaction.response.send_message(embed=embed)
 
+async def autocomplete_timezones(interaction: discord.Interaction, current_string: str) -> list[app_commands.Choice[str]]:
+    current_string = current_string.lower().strip()
+    similar = [
+        tz for tz in pytz.all_timezones if current_string in tz.lower().strip()
+    ]
+    # Discord only allows 25 suggestions at max
+    similar = similar[:25] 
+    return [app_commands.Choice(name=tz, value=tz) for tz in similar]
+
 # TODO: Add search arguments to be able to specify specific regions
 @bot.tree.command(name="timelord", description="Found out what time it is everywhere else!")
 @app_commands.describe(
     timezone="The timezone you would like to specifically check! E.g. `Asia/Tokyo`"
 )
+@app_commands.autocomplete(timezone=autocomplete_timezones)
 async def timelord(interaction: discord.Interaction, timezone: str|None=None):
     def get_time_info(time: datetime):
         hour = time.hour
@@ -756,7 +829,8 @@ async def timelord(interaction: discord.Interaction, timezone: str|None=None):
             hour2 = time.hour
         else:
             am_pm = "PM"
-            hour2 = time.hour - 12
+            hour2 = hour if hour <= 12 else hour - 12
+            hour2 = 12 if hour2 == 0 else hour2
 
         if 5 <= hour < 9:
             emoji = "🌅"  
@@ -770,8 +844,8 @@ async def timelord(interaction: discord.Interaction, timezone: str|None=None):
         return {
             "emoji": emoji,
             "am_pm": am_pm,
-            "24_hour_time": f"{current_time.strftime('%H:%M:%S')}", 
-            "12_hour_time": f"{hour2}{current_time.strftime(':%M:%S')}{am_pm}" 
+            "24_hour_time": f"{time.strftime('%H:%M:%S')}", 
+            "12_hour_time": f"{hour2}{time.strftime(':%M:%S')}{am_pm}" 
         }
 
     # EASTER EGG LOGIC
@@ -811,7 +885,6 @@ async def timelord(interaction: discord.Interaction, timezone: str|None=None):
         current_time = datetime.now(tz)
         time_info = get_time_info(current_time)
 
-        time_info = get_time_info(current_time)         
         date_str = current_time.strftime("%Y/%m/%d")
         emoji, formatted_time = time_info["emoji"], time_info["12_hour_time"]
         main_area, zone_area = timezone.split("/", maxsplit=1)
@@ -878,13 +951,14 @@ commands_and_meanings = {
     "/countdown": "Oh god what is this counting down to..",
     "/ping": "Am I online and working? I sure do hope so.",
     "/todaysbunny": "Find out what the lastest bunny is on dailybunny.org!",
-    "/cleanup `amount`": "A command to help mass delete messages! (Moderator Command)",
-    "/warn `member` `reason`": "Warns the given discord member so they don't make the same mistake again! (Moderator Command)",
-    "/embedui `include_images` `include_fields`": "A modern approach to make embeds quicker than using code or webhooks! (Moderator Command)",
-    "/embed `title` `description` `color` `image` `thumbnail` `field 1/2/... name/value/inline`": "Make embeds quick using no commands. But also try `/embedui` if you want a more improved approach! (Moderator Command)",
     "/vcleaderboard": "Who's been spending the most time in VC! Find out and compete for top spot!",
-    "/userinfo `member`": "Don't worry boss I'm ready to collect the intel! (Moderator Command)"
-    # "/ticket": ""
+    # "/ticket": "",
+    "/cleanup `amount`": "A command to help mass delete messages! ***(Moderator Command)***",
+    "/embedui `include_images` `include_fields`": "A modern approach to make embeds quicker than using code or webhooks! ***(Moderator Command)***",
+    "/embed `title` `description` `color` `image` `thumbnail` `field 1/2/... name/value/inline`": "Make embeds quick using no commands. But also try `/embedui` if you want a more improved approach! ***(Moderator Command)***",
+    "/userinfo `member`": "Don't worry boss I'm ready to collect the intel! ***(Moderator Command)***",
+    "/warn `member` `reason`": "Warns the given discord member so they don't make the same mistake again! ***(Moderator Command)***",
+    "|| /dump_database ||": "|| ***(Authorised Users Command) *** ||"
 }
 
 @bot.tree.command(name="help", description="I bet your a little confused on how I work aren't you!")
@@ -900,6 +974,7 @@ async def help(interaction: discord.Interaction):
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    error_traceback = "".join(traceback.format_exception(type(error), error, error.__traceback__))
     if isinstance(error, app_commands.errors.CommandOnCooldown):
         await interaction.response.send_message(f"**Please be patient! This command is on cooldown for another " + str("%.2f" % error.retry_after) + " seconds!**", 
                                                 ephemeral=True) 
@@ -909,8 +984,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
                        ephemeral=True)
 
     else:
-        # error.with_traceback(None)
-        print(f"A error of type `{type(error)}` occurred! Error:", error)
+        print(f"A error of type `{type(error)}` occurred! Error: {error} | Traceback:\n{error_traceback}")
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
@@ -919,12 +993,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             if payload.message_author_id == bot.user.id:
                 await found_easter_egg(payload.member, easter_egg_id=8)
 
-member_vc_times: dict[int, datetime] = {
-    # MEMBER_ID: StartTimeDateTime
-}
+
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    timestamp = datetime.now()
+    timestamp = datetime.now(dt.timezone.utc)
     
     in_vc_before = isinstance(before.channel, discord.VoiceChannel)
     in_vc = isinstance(after.channel, discord.VoiceChannel)
@@ -934,20 +1006,29 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     other_update = (exited_vc and entered_vc) == False
     we_have_there_start_time = member.id in member_vc_times.keys() 
 
-    if entered_vc:
-#        print(f"{member.name} entered VC at {timestamp}")
-        member_vc_times[member.id] = timestamp
+    if entered_vc and isinstance(after.channel, discord.VoiceChannel):
+        # print(f"{member.name} entered VC at {timestamp}")
+        member_vc_times[member.id] = {
+            "start_time": timestamp,
+            "channel_id": after.channel.id
+        }
     elif exited_vc and isinstance(before.channel, discord.VoiceChannel) and we_have_there_start_time: # Isinstance check is to stop type hinting error.
-        start_time = member_vc_times[member.id]
-        difference = timestamp - start_time
-        seconds_in_vc = difference.total_seconds()
-        DATABASE.set_vc_duration(member.id, before.channel, seconds_in_vc)
-        DATABASE.commit()
-#        print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
+        out = update_vc_times(specific_member_id=member.id, remove_from_dict=True)
+        if out == None: 
+            print(f"VC exit time for {member.name} was None even though this should never happen!?")
+            return # Should never happen - this is purely for type hinting
+        difference, seconds_in_vc = out
+
+        # print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
 
 @bot.tree.command(name="vcleaderboard", description="Check out who spent the most time in VC!")
-async def vcleaderboard(interaction: discord.Interaction):
+@app_commands.describe(
+    leaderboard="The leaderboard you want to check! TOP: Longest channel VC time, TOTAL: Total VC time globally."
+)
+async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatType=VCStatType.top):
     await interaction.response.defer()
+
+    update_vc_times(remove_from_dict=False) # Don't remove since we can assume they are still in VC - only remove when the bot is exiting or the user has VC state has changed to exiting (but then also specify specific_member_id) 
 
     embed = discord.Embed(
         title="VC Leaderboard",
@@ -956,26 +1037,30 @@ async def vcleaderboard(interaction: discord.Interaction):
     )
 
     # Sort everyone's top times and channels
-    all_users_top = []
+    all_users_scores = []
     for user_id in DATABASE.users():
-        top = DATABASE.top_vc_duration(user_id)
+        if leaderboard == VCStatType.top:
+            top = DATABASE.top_vc_duration(user_id)
+        else: # Should be VCStatType.total
+            top = DATABASE.total_vc_duration(user_id)
+
         if top == None or top["channel_id"] == -1 or top["duration"] == -1:
             continue
 
         value = {
             "user_id": user_id,
-            "top_duration": top["duration"],
-            "top_channel_id": top["channel_id"]
+            "duration": top["duration"],
+            "channel_id": top["channel_id"]
         }
-        all_users_top.append(value)
+        all_users_scores.append(value)
 
     # Sort list to be ranked and get the top ten
-    all_users_top = sorted(all_users_top, key=lambda x: x["top_duration"], reverse=True)
-    top_ten = all_users_top[:10]
+    all_users_scores = sorted(all_users_scores, key=lambda x: x["duration"], reverse=True)
+    top_ten = all_users_scores[:10]
     
     # Find user's rank
     member_place = next(
-        (index for index, user in enumerate(all_users_top, start=1) if str(user["user_id"]) == str(interaction.user.id)),
+        (index for index, user in enumerate(all_users_scores, start=1) if str(user["user_id"]) == str(interaction.user.id)),
         "???" # Could not find
     )
 
@@ -989,16 +1074,22 @@ async def vcleaderboard(interaction: discord.Interaction):
     i = 1
     for i, u in enumerate(top_ten, start=1):
         user_id = u["user_id"]
-        channel_id = u["top_channel_id"]
-        duration = u["top_duration"]
+        channel_id = u["channel_id"]
+        duration = u["duration"]
         top_ten_usernames += f"{i}: <@{user_id}>\n"
-        top_ten_channels += f"<#{channel_id}>\n"
-        top_ten_scores += f"{duration:.2f} seconds\n"
+        if str(channel_id).isdigit(): # Check if it is actually an ID as they are whole numbers
+            top_ten_channels += f"<#{channel_id}>\n"
+        else:
+            top_ten_channels += f"{channel_id}\n" # It is probably the name of the channel instead - or "Global" in the case that we are checking total not top
+        
+        # Remove the large quantity of zeros | 0:02:03.143400 => 0:02:03.14 
+        top_ten_scores += f"{str(timedelta(seconds=round(duration, 2)))[:-4]}\n"
+
     while i < 10: # Fill out missing spaces
         i += 1
         top_ten_usernames += f"{i}: ???\n"
         top_ten_channels += f"???\n"
-        top_ten_scores += f"??? seconds\n"
+        top_ten_scores += f"???\n"
     
     embed.add_field(name="Top 10", value=top_ten_usernames.strip(), inline=True)
     embed.add_field(name="Score", value=top_ten_scores.strip(), inline=True)
@@ -1008,15 +1099,23 @@ async def vcleaderboard(interaction: discord.Interaction):
     # Your Highscore        Score               Channel
     # 232: USERNAME         SECONDS seconds     CHANNEL
 
-    member_top = DATABASE.top_vc_duration(interaction.user.id)
+    if leaderboard == VCStatType.top:
+        member_top = DATABASE.top_vc_duration(interaction.user.id)
+    else:
+        member_top = DATABASE.total_vc_duration(interaction.user.id)
+
     member_highscore_username = f"{member_place}: <@{interaction.user.id}>"
 
     if member_top == None or member_top["found"] == False:
         member_highscore_score = "???"
         member_highscore_channel = "???"
     else:
-        member_highscore_score = f"{member_top['duration']:.2f} seconds"
-        member_highscore_channel = f"<#{member_top['channel_id']}>"
+        # Remove the large quantity of zeros | 0:02:03.143400 => 0:02:03.14 
+        member_highscore_score = str(timedelta(seconds=round(member_top['duration'], 2)))[:-4]
+        if str(member_top['channel_id']).isdigit():
+            member_highscore_channel = f"<#{member_top['channel_id']}>"
+        else:
+            member_highscore_channel = f"{member_top['channel_id']}"
 
     embed.add_field(name="Your Highscore", value=member_highscore_username)
     embed.add_field(name="Score", value=member_highscore_score)
@@ -1040,6 +1139,7 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member):
         if role.is_default(): continue
         roles_str += f"{role.mention}, "
     roles_str = roles_str.removesuffix(", ")
+    roles_str = roles_str if roles_str else "No roles"
 
     embed = discord.Embed(
         title="Bunny Warden's Report", 
@@ -1067,6 +1167,49 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member):
 
     await interaction.response.send_message(embed=embed)
 
+
+@bot.tree.command(name="dump_database", description="Dumps the database file! Authorised users only >:L")
+@has_role(ADMIN_ROLE_NAME)
+async def dump_database(interaction: discord.Interaction):
+    
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    
+    if not verified_user:
+        await interaction.response.send_message(
+            "Sorry but only specific users can use this command! These users include: Nerazawa, AAphid, and AirDolphin98",
+            ephemeral=True
+        )
+        return
+
+    database_path = abs_path_of("data\\main.json")
+    if not os.path.exists(database_path):
+        await interaction.response.send_message(
+            "Couldn't find database file sorry!",
+            ephemeral=True
+        )
+        return
+    
+    max_file_size_mb = 10
+    file_size_bytes = os.stat(database_path).st_size
+    file_size_mb = file_size_bytes / 1_000_000
+
+    if file_size_mb > max_file_size_mb:
+        await interaction.response.send_message(
+            f"The database is far to big to send over discord! Number of MegaBytes over: {file_size_mb - max_file_size_mb}",
+            ephemeral=True
+        )
+        return
+
+    attachment = discord.File(database_path, "main.json")
+
+
+    await interaction.response.send_message(
+        content="Here's the database!",
+        file=attachment,
+        ephemeral=True
+    )
+
+
 @bot.tree.command(name="setbirthday", description="Set your birthday so that we can wish you a happy birthday when it happens!")
 @app_commands.describe(
     day="The day you were born!", 
@@ -1074,11 +1217,10 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member):
     timezone="Your timezone! E.g. `Asia/Tokyo`!"
 )
 async def set_birthday(interaction: discord.Interaction, day: int, month: int, timezone: str):
-    if day <= 0 or day > 32: # TODO + NOTE: Technically could break on months that never get to 32
-        await interaction.response.send_message(content="I ain't no dumby that day makes no sense ಠ_ಠ")
-        return
-    if month <= 0 or month > 12:
-        await interaction.response.send_message(content="I ain't no dumby that month makes no sense ಠ_ಠ")
+    try:
+        datetime(year=2000, month=month, day=day)  # 2000 is a leap year so we can test more safely compared to other years with less days in Feb etc
+    except ValueError:
+        await interaction.response.send_message("I ain't no dumby — that's not a real date ಠ_ಠ")
         return
     if timezone not in pytz.all_timezones:
         await interaction.response.send_message(content="Sorry but I can't find that timezone!\nEnter something like `Asia/Tokyo`. If your confused here's a [list of all the timezones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)")
@@ -1116,7 +1258,7 @@ async def on_message(message: discord.Message):
         if not mentions_bot and message.reference and message.reference.message_id: # Also check if the bot is being replied to
             try:
                 replied_to_message = await message.channel.fetch_message(message.reference.message_id)
-            except discord.errors.NotFound:
+            except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException):
                 await bot.process_commands(message) # Allow default behaviour for any commands to also run for thee message
                 return
             mentions_bot = replied_to_message.author.id == bot.user.id
