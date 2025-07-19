@@ -493,9 +493,10 @@ def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
 
     # Levels (for description)
     education_levels = data["data"]["meta"]["education"]
-    grade = education_levels["grade"]
+    grade = str(education_levels["grade"]).removeprefix("grade")
     jlpt = str(education_levels["jlpt"]).removeprefix("JLPT.")
     if jlpt == "None": jlpt = None
+    if grade == "None": grade = None
     newspaper_rank = education_levels["newspaper_rank"]
 
     if not grade: grade = "?"
