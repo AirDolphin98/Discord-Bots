@@ -11,7 +11,7 @@ from jisho_api.word.request import WordRequest
 from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
-from utils import JSONDatabase, abs_path_of, VCStatType
+from utils import JSONDatabase, abs_path_of, VCStatType, find_role, has_role, command_error, find_category, is_ticket_channel
 from pprint import pprint
 
 
@@ -26,6 +26,8 @@ with open(abs_path_of("auth.json")) as auth, open(abs_path_of("config.json")) as
     DATABASE_PATH: str = CONFIG["database_path"]
     DATABASE_BACKUP_DELAY_HOURS: int = CONFIG["backups_config"]["delay_hours"]
     BIRTHDAY_CHANNEL_ID: int = CONFIG["happy_birthday_channel_id"]
+    TICKETS_CATEGORY_NAME: str = CONFIG["tickets_category_name"]
+    ARCHIVED_TICKETS_CATEGORY_NAME: str = CONFIG["archived_tickets_category_name"]
     del CONFIG
 
 DATABASE = JSONDatabase(DATABASE_PATH)
@@ -47,6 +49,11 @@ member_vc_times: dict[int, dict] = {
     #   "start_time": StartTimeDateTime,
     #   "channel_id": INT,
 }
+
+################################################
+# MISC FUNCTIONS
+################################################
+
 def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bool=False) -> tuple|None:
     global member_vc_times
     timestamp = datetime.now(dt.timezone.utc)
@@ -76,7 +83,6 @@ def on_exit():
     DATABASE.commit()
     update_vc_times(remove_from_dict=True) # Assume they left the VC since the bot has exited and we can't keep tracking them
     # backup_task.stop()
-
 atexit.register(on_exit)
 
 async def backup_task():
@@ -105,24 +111,23 @@ async def found_easter_egg(member: discord.User | discord.Member, *, easter_egg_
     egg.unlock(member.id) # So that the user isn't messaged again if they happen to complete the same easter egg
     DATABASE.commit()
 
-def has_role(role_name: str):
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if isinstance(interaction.user, discord.Member):
-            return any(role.name == role_name for role in interaction.user.roles)
-        return False # user was not of type discord.Member so we couldn't check there roles.
-    return app_commands.check(predicate)
+async def archive_channel(channel: discord.TextChannel):
+    if not isinstance(channel, discord.TextChannel): return False
+    
+    for m in channel.members:
+        if (bot.user is not None) and (m.id == bot.user.id):
+            continue
 
-async def command_error(reason: str, *, interaction: discord.Interaction, followup=False):
+        overwrites = channel.overwrites_for(m)
+        if not overwrites.view_channel:
+            continue # They didn't have access to this channel in the first place so we shouldn't modify them!
+        # overwrites.view_channel = True
+        overwrites.send_messages = False
+        overwrites.read_messages = True
+        overwrites.use_application_commands = False
+        await channel.set_permissions(m, overwrite=overwrites)
 
-    description = "There was an error running the given command."
-
-    embed = discord.Embed(title=f"Error while running command!", description=description, color=discord.Colour.orange(), timestamp=datetime.now())
-    embed.add_field(name="Reason", value=reason)
-
-    if followup:
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    else:
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+    return True
 
 async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Member|discord.User):#, message: str):
     embed = discord.Embed(
@@ -210,26 +215,11 @@ async def add_missing_vc_people():
                 "channel_id": member.voice.channel.id
             }
 
-@bot.event
-async def on_ready():
 
-    await bot.tree.sync() # Sync tree command structure
 
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="the screams of the damned"))
-
-    print(f"[GREEN]Logged in as {bot.user}")
-    
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
-    scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
-    scheduler.start()
-    print("Scheduler setup!")
-
-    await check_bdays()
-    await add_missing_vc_people()
-    await backup_task()
-
-    
+################################################
+# COMMANDS HANDLING
+################################################
 
 ping_counter = 0
 tired_ping_amt = random.randint(5, 7)
@@ -352,7 +342,7 @@ async def credits(interaction: discord.Interaction, who_are_we_missing: str|None
     embed.add_field(name="🧑‍💻👩‍💻 Programmers", value="Thank you to AAphid for being the core programmer and coding the main bot. \nA secondary thanks to AirDolphin98 for providing feedback and helping out further with the code!", inline=False)
     embed.add_field(name="🗃️ Hosting", value="Thanks to AirDolphin98 for supplying hosting to the discord bot so that it can actually run and exist!", inline=False)
     embed.add_field(name="🐰 The Main Bunny", value="And finally of course thank you Nerazawa for inspiring this bot and creating the server!", inline=False)
-    embed.add_field(name="✨ Inspiration", value="The QuickJisho command's look and feel was inspired by the [Kobota](https://top.gg/bot/251239170058616833) discord bot! \nThe Embed UI command was inspired by AirDolphin98's [aao-helper](https://github.com/AirDolphin98/aao-helper/blob/main/embed_maker.py)!", inline=False) 
+    embed.add_field(name="✨ Inspiration", value="The QuickJisho command's look and feel was inspired by the [Kobota](<https://top.gg/bot/251239170058616833>) discord bot! \nThe Embed UI command was inspired by AirDolphin98's [aao-helper](<https://github.com/AirDolphin98/aao-helper/blob/main/embed_maker.py>)!", inline=False) 
     if hidden_field is not None:
         embed.add_field(name=hidden_field["heading"], value=hidden_field["body"], inline=False) 
 
@@ -460,8 +450,16 @@ def search_word(search_query: str, result: WordRequest) -> discord.Embed:
                 words_str += f"{w} ({readings_str})"
 
         # Info tag
-        tags_str = ' '.join(word_data["tags"]).title()
-        jlpt_str = ' '.join(word_data["jlpt"]).capitalize()
+        tags = word_data["tags"]
+        tags_str = ""
+        if tags:
+            tags_str = ' '.join(tags).title()
+        
+        jlpt = word_data["jlpt"]
+        jlpt_str = ''
+        if jlpt:
+            jlpt_str = ' '.join(jlpt).capitalize()
+        
         is_common = word_data["is_common"]
         common_str = "Common" if is_common else ""
 
@@ -474,11 +472,11 @@ def search_word(search_query: str, result: WordRequest) -> discord.Embed:
             english_definitions = sense["english_definitions"]
             english_definitions_str = ', '.join(english_definitions)
             parts_of_speech = sense["parts_of_speech"]
-            parts_of_speech_str = f"[{', '.join(parts_of_speech)}]"
+            parts_of_speech_str = f"*[{', '.join(parts_of_speech)}]*"
             definitions_str += f"{i}. {english_definitions_str} {parts_of_speech_str}\n"
 
         # Combine into the embed
-        if info_string != ", ":
+        if info_string != "":
             final = f"`{info_string}`\n{definitions_str}"
         else:
             final = definitions_str
@@ -490,11 +488,19 @@ def search_word(search_query: str, result: WordRequest) -> discord.Embed:
 def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
     data = result.dict()
 
+    if not data["data"]:
+        return discord.Embed(title=f"{search_query} - No Results", description="Sorry my little dictionary doesn't know that word!", color=discord.Colour.green(), url=f"https://jisho.org/search/{search_query.replace(' ', '%20')}")
+
     # Levels (for description)
     education_levels = data["data"]["meta"]["education"]
     grade = education_levels["grade"]
-    jlpt = education_levels["jlpt"]
+    jlpt = str(education_levels["jlpt"]).removeprefix("JLPT.")
+    if jlpt == "None": jlpt = None
     newspaper_rank = education_levels["newspaper_rank"]
+
+    if not grade: grade = "?"
+    if not jlpt: jlpt = "?"
+    if not newspaper_rank: newspaper_rank = "?"
 
     description = f"Taught in grade {grade}, JLPT {jlpt}, newspaper frequency rank #{newspaper_rank}."
 
@@ -509,8 +515,10 @@ def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
     main_readings: dict = data["data"]["main_readings"]
     kunyomis: list = main_readings["kun"]
     onyomis: list = main_readings["on"]
-    embed.add_field(name="Kunyomi", value=', '.join(kunyomis))
-    embed.add_field(name="Onyomis", value=', '.join(onyomis))
+    if kunyomis:
+        embed.add_field(name="Kunyomi", value=', '.join(kunyomis))
+    if onyomis:
+        embed.add_field(name="Onyomis", value=', '.join(onyomis))
 
     # Radical
     radical: dict = data["data"]["radical"]
@@ -520,11 +528,13 @@ def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
 
     # Radical forms
     alt_forms: list[str] = radical["alt_forms"]
-    embed.add_field(name="Radical Forms", value=', '.join(alt_forms))
+    if alt_forms:
+        embed.add_field(name="Radical Forms", value=', '.join(alt_forms))
 
     # Parts
     parts: list[str] = radical["parts"]
-    embed.add_field(name="Parts", value=', '.join(parts))
+    if parts:
+        embed.add_field(name="Parts", value=', '.join(parts))
 
     # Stroke count
     strokes: int = data["data"]["strokes"]
@@ -532,7 +542,8 @@ def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
 
     # Meaning
     main_meanings = data["data"]["main_meanings"]
-    embed.add_field(name="Meaning", value=', '.join(main_meanings), inline=False)
+    if main_meanings:
+        embed.add_field(name="Meaning", value=', '.join(main_meanings))
 
     # Examples
     examples_str = ""
@@ -557,7 +568,7 @@ def search_kanji(search_query: str, result: KanjiRequest) -> discord.Embed:
 @bot.tree.command(name="lookup", description="Quickly check a word/kanji or sentence in jisho.org")
 @app_commands.describe(
     word="English or japanese word",
-    kanji="KANJI!!",
+    kanji="Search a singular kanji!!",
     # sentence="A full sentence"
 )
 async def quickjisho(interaction: discord.Interaction, word: str|None=None, kanji: str|None=None): #sentence: str|None=None):
@@ -568,10 +579,10 @@ async def quickjisho(interaction: discord.Interaction, word: str|None=None, kanj
     search_query = None
     if word is not None:
         search_query = word.lower()
-        r = Word.request(word.lower())
+        r = Word.request(search_query)
     elif kanji is not None:
-        search_query = kanji.lower()
-        r = Kanji.request(kanji.lower())
+        search_query = kanji.lower()[0] # Only take the first kanji!!
+        r = Kanji.request(search_query)
     # elif sentence is not None:
     #     search_query = sentence
     #     r = Sentence.request(sentence)
@@ -586,7 +597,7 @@ async def quickjisho(interaction: discord.Interaction, word: str|None=None, kanj
         await interaction.followup.send(embed=embed)
         return
     
-    if search_query == "easter egg":
+    if search_query == "easter egg": # only works for "word" as kanji only takes the first character
         await found_easter_egg(interaction.user, easter_egg_id=7)
 
     if word and isinstance(r, WordRequest):
@@ -951,8 +962,12 @@ commands_and_meanings = {
     "/countdown": "Oh god what is this counting down to..",
     "/ping": "Am I online and working? I sure do hope so.",
     "/todaysbunny": "Find out what the lastest bunny is on dailybunny.org!",
-    "/vcleaderboard": "Who's been spending the most time in VC! Find out and compete for top spot!",
-    # "/ticket": "",
+    "/vcleaderboard `leaderboard`": "Who's been spending the most time in a VC or in total! Find out and compete for top spot!",
+    "/ticket create `title` `description` `attachment`": "Suggest or report something to the mods!",
+    "/ticket add `member`": "Add another person to the ticket if needed!",
+    "/ticket cancel": "Close a ticket if you changed your mind!",
+    "/ticket resolve": "Close a ticket and mark as resolved! ***(Moderator Command)***",
+    "/ticket abandon": "*Delete* a ticket without resolving! ***(Moderator Command)***",
     "/cleanup `amount`": "A command to help mass delete messages! ***(Moderator Command)***",
     "/embedui `include_images` `include_fields`": "A modern approach to make embeds quicker than using code or webhooks! ***(Moderator Command)***",
     "/embed `title` `description` `color` `image` `thumbnail` `field 1/2/... name/value/inline`": "Make embeds quick using no commands. But also try `/embedui` if you want a more improved approach! ***(Moderator Command)***",
@@ -972,60 +987,11 @@ async def help(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    error_traceback = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-    if isinstance(error, app_commands.errors.CommandOnCooldown):
-        await interaction.response.send_message(f"**Please be patient! This command is on cooldown for another " + str("%.2f" % error.retry_after) + " seconds!**", 
-                                                ephemeral=True) 
-
-    elif isinstance(error, app_commands.errors.CheckFailure):
-        await interaction.response.send_message(f"**You seem to be missing something to run this command! Maybe you don't have the required role or permissions?**",
-                       ephemeral=True)
-
-    else:
-        print(f"A error of type `{type(error)}` occurred! Error: {error} | Traceback:\n{error_traceback}")
-
-@bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if payload.emoji.name == "🥚":
-        if bot.user and payload.member:
-            if payload.message_author_id == bot.user.id:
-                await found_easter_egg(payload.member, easter_egg_id=8)
-
-
-@bot.event
-async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    timestamp = datetime.now(dt.timezone.utc)
-    
-    in_vc_before = isinstance(before.channel, discord.VoiceChannel)
-    in_vc = isinstance(after.channel, discord.VoiceChannel)
-
-    exited_vc = in_vc_before and in_vc == False
-    entered_vc = in_vc_before == False and in_vc
-    other_update = (exited_vc and entered_vc) == False
-    we_have_there_start_time = member.id in member_vc_times.keys() 
-
-    if entered_vc and isinstance(after.channel, discord.VoiceChannel):
-        # print(f"{member.name} entered VC at {timestamp}")
-        member_vc_times[member.id] = {
-            "start_time": timestamp,
-            "channel_id": after.channel.id
-        }
-    elif exited_vc and isinstance(before.channel, discord.VoiceChannel) and we_have_there_start_time: # Isinstance check is to stop type hinting error.
-        out = update_vc_times(specific_member_id=member.id, remove_from_dict=True)
-        if out == None: 
-            print(f"VC exit time for {member.name} was None even though this should never happen!?")
-            return # Should never happen - this is purely for type hinting
-        difference, seconds_in_vc = out
-
-        # print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
-
 @bot.tree.command(name="vcleaderboard", description="Check out who spent the most time in VC!")
 @app_commands.describe(
     leaderboard="The leaderboard you want to check! TOP: Longest channel VC time, TOTAL: Total VC time globally."
 )
-async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatType=VCStatType.top):
+async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatType=VCStatType.total):
     await interaction.response.defer()
 
     update_vc_times(remove_from_dict=False) # Don't remove since we can assume they are still in VC - only remove when the bot is exiting or the user has VC state has changed to exiting (but then also specify specific_member_id) 
@@ -1223,7 +1189,7 @@ async def set_birthday(interaction: discord.Interaction, day: int, month: int, t
         await interaction.response.send_message("I ain't no dumby — that's not a real date ಠ_ಠ")
         return
     if timezone not in pytz.all_timezones:
-        await interaction.response.send_message(content="Sorry but I can't find that timezone!\nEnter something like `Asia/Tokyo`. If your confused here's a [list of all the timezones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)")
+        await interaction.response.send_message(content="Sorry but I can't find that timezone!\nEnter something like `Asia/Tokyo`. If your confused here's a [list of all the timezones](<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>)")
         return
     
     if day == 24 and month == 9:
@@ -1240,6 +1206,281 @@ async def set_birthday(interaction: discord.Interaction, day: int, month: int, t
 
     await interaction.response.send_message(content="Can't wait to have fun on your birthday (˶˃ᵕ˂˶)!")
 
+
+
+ticket_commands = app_commands.Group(name="ticket", description="This is a description.")
+
+@ticket_commands.command(name="create", description="Give suggestions or report something to the mods!")
+@app_commands.describe(
+    title="A short consise title for your ticket!",
+    description="The reason and description of why you made this ticket!",
+    attachment="A image related to the problem"
+)
+@app_commands.checks.cooldown(1, 10, key=lambda i: i.user.id) # Stop people spamming tickets
+async def ticket_create(interaction: discord.Interaction, title: str, description: str, attachment: discord.Attachment|None=None):
+    #### CHECK THAT ALL THE ARGS ARE PROPERLY FILLED
+    await interaction.response.defer()
+
+    if title.strip() == "": 
+        await interaction.followup.send("Please add a relevant title to the ticket!", ephemeral=True)
+        return
+    if description.strip() == "": 
+        await interaction.followup.send("Please specify the reason for this ticket in the description!", ephemeral=True)
+        return
+    if interaction.guild is None:
+        await interaction.followup.send("Cannot access your current guild!", ephemeral=True)
+        return
+    
+    member = interaction.user
+
+    #### PERMISSIONS FOR EACH USER IN THIS TICKET CHANNEL
+
+    overwrites = {
+        interaction.guild.default_role: discord.PermissionOverwrite( # Default users
+            view_channel=False
+        ),
+        interaction.user: discord.PermissionOverwrite( # User who created the ticket
+            view_channel=True,
+            send_messages=True, 
+            read_messages=True,
+            read_message_history=True,
+            attach_files=True,
+            embed_links=True,
+            add_reactions=True,
+            use_application_commands = False
+        ),
+        interaction.guild.me: discord.PermissionOverwrite( # Bot permissions
+            view_channel=True,
+            manage_channels=True,
+            read_messages=True,
+            send_messages=True, 
+            read_message_history=True,
+            add_reactions=True,
+            use_application_commands = False
+        ),
+    }
+
+    # Add missing admin role to overwrites!
+    admin_role = find_role(ADMIN_ROLE_NAME, guild=interaction.guild)
+    if admin_role:
+        overwrites[admin_role] = discord.PermissionOverwrite( # Admin permissions
+            view_channel=True,
+            send_messages=True, 
+            read_messages=True,
+            read_message_history=True,
+            add_reactions=True,
+            use_application_commands = False
+        )
+    
+    #### FIND OR CREATE TICKET CATEGORY
+
+    tickets_category = await find_category(TICKETS_CATEGORY_NAME, interaction.guild)
+
+    channel = await tickets_category.create_text_channel(
+        name=f"ticket-{member.name}-{title}", # ticket-CREATORNAME-TITLE
+        overwrites=overwrites
+    )
+
+    #### CREATE EMBED TO SEND IN TICKET
+
+    starting_embed = discord.Embed(
+        title=f"Ticket Information",
+        colour=discord.Colour.blurple(),
+        timestamp=datetime.now(),
+        description=f"""
+✏️This ticket was created by {interaction.user.mention}!
+**📌Title:** {title} 
+**📝Description:** {description}
+""".strip())
+
+    starting_embed.set_footer(text="One of our moderators should assist you soon~")
+    
+    starting_embed.add_field(name="Useful Ticket Commands", value=f"""
+- /ticket add <user>
+- /ticket resolve
+- /ticket cancel
+""".strip(), inline=True)
+    starting_embed.add_field(name="Definitions", value=f"""
+- Add another user to the ticket!
+- Resolve the ticket once its solved!
+- Changed your mind? Run this!
+""".strip(), inline=True)
+    
+    starting_embed.add_field(name="", value="", inline=False) # To make a new line while keeping everything else inline
+
+    starting_embed.add_field(name="Moderator Ticket Commands", value=f"""
+- /ticket abandon
+""".strip(), inline=True)
+    starting_embed.add_field(name="Definitions", value=f"""
+- Close ticket without resolving
+""".strip(), inline=True)
+
+    starting_embed.set_author(
+        name=interaction.user.name,
+        icon_url=interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url
+    )
+
+    if attachment:
+        starting_embed.set_image(url=attachment.url)
+
+    # Add starting embed
+    message = await channel.send(embed=starting_embed)
+    await message.pin()
+
+    # Inform user the ticket has been created
+    await interaction.followup.send(f"Your ticket has been created! \nGo here: {channel.jump_url}", ephemeral=True)
+
+@ticket_commands.command(name="add", description="Add another person to the ticket if needed!")
+async def ticket_add(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.defer()
+
+    if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.followup.send("Cannot access your current channel!", ephemeral=True)
+        return
+    if not is_ticket_channel(interaction.channel):
+        await interaction.followup.send("This is not a ticket channel!", ephemeral=True)
+        return
+
+    overwrites = interaction.channel.overwrites_for(member)
+
+    if overwrites.view_channel: # In case the user is trying to be sneaky and overide some mod's perms - or they just didn't realise the user was already in the ticket @.@
+        await interaction.followup.send("This user is already in the ticket!", ephemeral=True)
+        return
+
+     # User who was added to the ticket - same perms as ticket author
+    overwrites.view_channel=True
+    overwrites.send_messages=True 
+    overwrites.read_messages=True
+    overwrites.read_message_history=True
+    overwrites.attach_files=True
+    overwrites.embed_links=True
+    overwrites.add_reactions=True
+    overwrites.use_application_commands = False # Don't let them `/ticket close` the ticket!! - In case they are a troll or smth
+    
+    await interaction.channel.set_permissions(member, overwrite=overwrites)
+    
+    # Send response and embed
+    new_user_embed = discord.Embed(
+        title=f"👋 Added New Member!",
+        colour=discord.Colour.dark_gold(),
+        timestamp=datetime.now(),
+        description=f"{interaction.user.mention} added {member.mention} to the ticket!"
+    )
+    await interaction.followup.send(embed=new_user_embed)
+
+
+@ticket_commands.command(name="resolve", description="Resolve the current ticket!")
+async def ticket_resolve(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    if interaction.guild is None:
+        await interaction.followup.send("Cannot access your current guild!", ephemeral=True)
+        return
+    if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.followup.send("Cannot access your current channel!", ephemeral=True)
+        return
+    if not is_ticket_channel(interaction.channel):
+        await interaction.followup.send("This is not a ticket channel!", ephemeral=True)
+        return
+
+    # Rename channel to include ✅
+    prev_name = interaction.channel.name
+    if not prev_name.startswith("✅"):
+        await interaction.channel.edit(name=f"✅{prev_name}")
+
+    # Send response and embed
+    resolved_embed = discord.Embed(
+        title=f"✅ Resolved ticket!",
+        colour=discord.Colour.green(),
+        timestamp=datetime.now(),
+        description=f"This ticket has now been resolved by {interaction.user.mention}!"
+    )
+    await interaction.followup.send(embed=resolved_embed)
+
+    # Archive and move
+    await archive_channel(interaction.channel)
+
+    archived_category = await find_category(ARCHIVED_TICKETS_CATEGORY_NAME, interaction.guild)
+    await interaction.channel.edit(category=archived_category)
+
+@ticket_commands.command(name="cancel", description="Archive the ticket before solving if you change your mind!")
+async def ticket_cancel(interaction: discord.Interaction):
+    await interaction.response.defer()
+    if interaction.guild is None:
+        await interaction.followup.send("Cannot access your current guild!", ephemeral=True)
+        return
+    if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.followup.send("Cannot access your current channel!", ephemeral=True)
+        return
+    if not is_ticket_channel(interaction.channel):
+        await interaction.followup.send("This is not a ticket channel!", ephemeral=True)
+        return
+    
+    prev_name = interaction.channel.name
+    if not prev_name.startswith("➖"):
+        await interaction.channel.edit(name=f"➖{prev_name}")
+
+    resolved_embed = discord.Embed(
+        title=f"➖ Canceled ticket!",
+        colour=discord.Colour.light_grey(),
+        timestamp=datetime.now(),
+        description=f"This ticket has now been canceled by {interaction.user.mention}! \nIn case of a mistake or for documentation purposes this channel has not be deleted."
+    )
+    await interaction.followup.send(embed=resolved_embed)
+
+    # Archive and move!
+    await archive_channel(interaction.channel)
+
+    archived_category = await find_category(ARCHIVED_TICKETS_CATEGORY_NAME, interaction.guild)
+    await interaction.channel.edit(category=archived_category)
+
+
+@ticket_commands.command(name="abandon", description="Forcefully close ticket without resolve (Moderator Command)")
+@has_role(ADMIN_ROLE_NAME)
+async def ticket_abandon(interaction: discord.Interaction, reason:str|None=None):
+    await interaction.response.defer()
+    if interaction.guild is None:
+        await interaction.followup.send("Cannot access your current guild!", ephemeral=True)
+        return
+    if interaction.channel is None or not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.followup.send("Cannot access your current channel!", ephemeral=True)
+        return
+    if not is_ticket_channel(interaction.channel):
+        await interaction.followup.send("This is not a ticket channel!", ephemeral=True)
+        return
+    
+    # Rename channel to include 💀
+    prev_name = interaction.channel.name
+    if not prev_name.startswith("💀"):
+        await interaction.channel.edit(name=f"💀{prev_name}")
+
+    async def delete_channel(interaction: discord.Interaction):
+        if not is_ticket_channel(interaction.channel): return # Just a double check incase I did something wrong!!!
+        await interaction.channel.delete(reason=f"The ticket channel was abandoned by `{interaction.user.name}`!") # type: ignore
+
+    await archive_channel(interaction.channel)
+    archived_category = await find_category(ARCHIVED_TICKETS_CATEGORY_NAME, interaction.guild)
+    await interaction.channel.edit(category=archived_category, reason=f"The ticket channel was abandoned by {interaction.user.name}, for the reason: `{reason}`")
+
+    abandoned_embed = discord.Embed(
+        title=f"💀 Abandoned ticket!",
+        colour=discord.Colour.red(),
+        timestamp=datetime.now(),
+        description=f"This ticket has now been abandoned by {interaction.user.mention}! \n"
+    )
+    if reason:
+        abandoned_embed.add_field(name="Reason", value=reason)
+
+    await interaction.channel.send(embed=abandoned_embed, view=modals.DeleteTicketConfirmation_View(interaction.user, callback=delete_channel))
+
+    await interaction.followup.send("Abandoned ticket! \nPress the delete channel button if you want to get rid of it!", ephemeral=True)
+    
+
+bot.tree.add_command(ticket_commands)
+
+################################################
+# EVENTS + ERROR HANDLING
+################################################
 
 statements_and_responses = {
     "Yoooo Bot man whats good whats good, you up bro?": "Oh you know it! Spitting fire bro, processing straight facts man",
@@ -1275,6 +1516,81 @@ async def on_message(message: discord.Message):
                 await found_easter_egg(message.author, easter_egg_id=10)
 
     await bot.process_commands(message) # Allow default behaviour for any commands to also run for thee message
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    error_traceback = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    if isinstance(error, app_commands.errors.CommandOnCooldown):
+        await interaction.response.send_message(f"**Please be patient! This command is on cooldown for another " + str("%.2f" % error.retry_after) + " seconds!**", 
+                                                ephemeral=True) 
+
+    elif isinstance(error, app_commands.errors.CheckFailure):
+        await interaction.response.send_message(f"**You seem to be missing something to run this command! Maybe you don't have the required role or permissions?**",
+                       ephemeral=True)
+
+    else:
+        print(f"A error of type `{type(error)}` occurred! Error: {error} | Traceback:\n{error_traceback}")
+        censored_error = str(error).replace(TOKEN, "REDACTED") # In case the error for some reason includes the token 💀
+        await interaction.response.send_message(
+            f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
+        )
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if payload.emoji.name == "🥚":
+        if bot.user and payload.member:
+            if payload.message_author_id == bot.user.id:
+                await found_easter_egg(payload.member, easter_egg_id=8)
+
+
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    timestamp = datetime.now(dt.timezone.utc)
+    
+    if member.bot:
+        return
+
+    in_vc_before = isinstance(before.channel, discord.VoiceChannel)
+    in_vc = isinstance(after.channel, discord.VoiceChannel)
+
+    exited_vc = in_vc_before and in_vc == False
+    entered_vc = in_vc_before == False and in_vc
+    other_update = (exited_vc and entered_vc) == False
+    we_have_there_start_time = member.id in member_vc_times.keys() 
+
+    if entered_vc and isinstance(after.channel, discord.VoiceChannel):
+        # print(f"{member.name} entered VC at {timestamp}")
+        member_vc_times[member.id] = {
+            "start_time": timestamp,
+            "channel_id": after.channel.id
+        }
+    elif exited_vc and isinstance(before.channel, discord.VoiceChannel) and we_have_there_start_time: # Isinstance check is to stop type hinting error.
+        out = update_vc_times(specific_member_id=member.id, remove_from_dict=True)
+        if out == None: 
+            print(f"VC exit time for {member.name} was None even though this should never happen!?")
+            return # Should never happen - this is purely for type hinting
+        difference, seconds_in_vc = out
+
+        # print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
+
+@bot.event
+async def on_ready():
+
+    await bot.tree.sync() # Sync tree command structure
+
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="the screams of the damned"))
+
+    print(f"[GREEN]Logged in as {bot.user}")
+    
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
+    scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
+    scheduler.start()
+    print("Scheduler setup!")
+
+    await check_bdays()
+    await add_missing_vc_people()
+    await backup_task()
 
 # Run bot
 bot.run(TOKEN)

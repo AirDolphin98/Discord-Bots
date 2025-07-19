@@ -1,5 +1,5 @@
 from __future__ import annotations # Allows type hinting classes that haven't been setup yet - Requires Python 3.7+
-import json, os, pprint, discord
+import json, os, pprint, discord, typing
 from enum import Enum
 from datetime import datetime
 
@@ -386,6 +386,71 @@ class VCStatType(Enum):
 
     def __str__(self):
         return self.value
+
+# Same as: discord.interactions.InteractionChannel (however we can't access that variable)
+AllChannelTypes = typing.Union[
+    discord.VoiceChannel,
+    discord.StageChannel,
+    discord.TextChannel,
+    discord.ForumChannel,
+    discord.CategoryChannel,
+    discord.Thread,
+    discord.DMChannel,
+    discord.GroupChannel,
+]
+
+def find_role(name, *, guild: discord.Guild) -> discord.Role|None:
+    for r in guild.roles:
+        if r.name == name:
+            return r
+    return None
+
+def has_role(role_name: str):
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if isinstance(interaction.user, discord.Member):
+            return any(role.name == role_name for role in interaction.user.roles)
+        return False # user was not of type discord.Member so we couldn't check there roles.
+    return discord.app_commands.check(predicate)
+
+async def command_error(reason: str, *, interaction: discord.Interaction, followup=False):
+
+    description = "There was an error running the given command."
+
+    embed = discord.Embed(title=f"Error while running command!", description=description, color=discord.Colour.orange(), timestamp=datetime.now())
+    embed.add_field(name="Reason", value=reason)
+
+    if followup:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+async def find_category(name, guild: discord.Guild) -> discord.CategoryChannel:
+    tickets_category = next(
+        (c for c in guild.categories if c.name == name),
+        None
+    )
+    # Create category if missing
+    if tickets_category is None:
+        tickets_category = await guild.create_category(name=name)
+        print("Created missing tickets category!")
+    
+    return tickets_category
+
+def is_ticket_channel(channel: discord.TextChannel|None|AllChannelTypes):
+    if not isinstance(channel, discord.TextChannel) or channel is None:
+        return False
+    
+    valid_starts = [
+        "ticket-",
+        "✅ticket-",
+        "💀ticket-"
+    ]
+    for start in valid_starts:
+        if channel.name.startswith(start):
+            return True
+
+    return False
+
 
 if __name__ == "__main__":
     db = JSONDatabase("data/main.json")

@@ -1,9 +1,11 @@
 {
-    "database_path": "data/main.json",
+    "database_path": "./data/main.json",
     "max_jisho_results": 3,
     "staff_role": "Lop",
     "backups_config": {
         "delay_hours": 3
     },
-    "happy_birthday_channel_id": 1338853348530454550
+    "happy_birthday_channel_id": 1338853348530454550,
+    "tickets_category_name": "tickets",
+    "archived_tickets_category_name": "completed_tickets"
 }

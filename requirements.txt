@@ -24,7 +24,7 @@ h11==0.16.0
 httpcore==1.0.5
 httpx==0.27.0
 idna==3.10
-jisho-api==0.1.8
+jisho_api @ git+https://github.com/pedroallenrevez/jisho-api@b1d9ec09e999bb35b9903a1023cf8bc9c74107c1
 multidict==6.6.3
 openai==1.36.1
 pillow==11.3.0

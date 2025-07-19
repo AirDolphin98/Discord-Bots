@@ -88,3 +88,19 @@ class CreateEmbedModal_Page2(Modal):
                     data.update({custom_id: val})
         
         await self.on_complete_callback(interaction, data)
+
+
+class DeleteTicketConfirmation_View(View):
+    def __init__(self, user_who_abandoned: discord.Member|discord.User, callback = lambda interaction: interaction):
+        super().__init__()
+        self.on_click_callback = callback
+        self.who_abandoned = user_who_abandoned
+
+    @discord.ui.button(label="Click to delete channel", style=discord.ButtonStyle.primary)
+    async def test(self, interaction: discord.Interaction, button: discord.ui.Button, style=discord.ButtonStyle.primary):
+        if self.who_abandoned.id != interaction.user.id:
+            await interaction.response.send_message("You did not abandon this ticket so you can't delete it!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("Deleting channel")
+        await self.on_click_callback(interaction)
