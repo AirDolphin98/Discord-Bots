@@ -276,12 +276,26 @@ async def cleanup(interaction: discord.Interaction, amount: int):
     elif amount == 7:
         await found_easter_egg(interaction.user, easter_egg_id=4)
 
-    if isinstance(interaction.channel, discord.TextChannel):
+    if not isinstance(interaction.channel, discord.TextChannel):
+        await command_error("Can not run cleanup command in this channel. Please run the command in a text channel.", interaction=interaction)
+        return
+    
+    if interaction.guild is None:
+        await command_error("Cannot access your current guild (discord server).", interaction=interaction)
+        return
+
+    if not interaction.channel.permissions_for(interaction.guild.me).manage_messages:
+        return await interaction.followup.send("I don't have permission to manage messages in this channel.")
+
+    try:
         deleted = await interaction.channel.purge(limit=amount)
         await interaction.followup.send(f"Tidied up the place and removed {len(deleted)} dust bunnies!")
 
-    else:
-        await command_error("Can not run cleanup command in this channel. Please run the command in a text channel.", interaction=interaction)
+    except discord.Forbidden:
+        await command_error("I don't have permission to delete messages in this channel.", interaction=interaction, followup=True)
+    except Exception as e:
+        await command_error(f"Unexpected error: {e}", interaction=interaction, followup=True)
+
 
 target = datetime(2026, 12, 23, 12, 34, 20, 0)
 @bot.tree.command(name="countdown", description="How much time is left until the countdown finishes..")
