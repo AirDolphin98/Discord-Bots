@@ -640,11 +640,13 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_update(before, after): #for spam accounts joining in Soul Sanctum
-    roles_set = set([r.id for r in after.roles])
+    auto_roles = {793741327874654219, 810822847622021132} # Wisp, QOTD
+    roles_set = set([r.id for r in after.roles]) - auto_roles
     sus_colors = {797228323192700948, 797227641794461716, 797219806574149672, 804928191315705868, 797220234012262460} #Light Slate Blue, Pig Pink, Electric Indigo, Dark Violet, Electric Purple
     sus_clubs = {822853677093879838, 875840284947259412, 826982479919317013, 812293377956773918, 810822858442801172, 810822856853946408, 810822851748823040, 810822854018203658} # Minecraft, VC, various Sanctums
+    all_sus_roles = sus_colors.union(sus_clubs)
     bots_channel = after.guild.get_channel(793737732391698453) # bots
-    if len(sus_colors.intersection(roles_set)) > 1 and len(sus_clubs.intersection(roles_set)) > 2 and len(roles_set) - len(sus_colors.union(sus_clubs).intersection(roles_set)) < 3 and datetime.now(datetime_module.timezone.utc) - after.joined_at < timedelta(hours=1):
+    if len(sus_colors.intersection(roles_set)) > 1 and len(sus_clubs.intersection(roles_set)) > 2 and len(roles_set) - len(all_sus_roles.intersection(roles_set)) < 3 and datetime.now(datetime_module.timezone.utc) - after.joined_at < timedelta(minutes=3):
         await after.ban(reason="detected spam role pattern")
         await bots_channel.send(f"Banned {after.mention} who joined <t:{round(after.joined_at.timestamp())}:f> for sus roles select pattern :dancer:\nRoles: {' | '.join([r.name for r in after.roles][1:])}")
 
