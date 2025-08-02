@@ -640,7 +640,7 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_update(before, after): #for spam accounts joining in Soul Sanctum
-    auto_roles = {793741327874654219, 810822847622021132} # Wisp, QOTD
+    auto_roles = {793741327874654219, 810822847622021132, 793730524953968661} # Wisp, QOTD, everyone (guild id)
     roles_set = set([r.id for r in after.roles]) - auto_roles
     sus_colors = {797228323192700948, 797227641794461716, 797219806574149672, 804928191315705868, 797220234012262460} #Light Slate Blue, Pig Pink, Electric Indigo, Dark Violet, Electric Purple
     sus_clubs = {822853677093879838, 875840284947259412, 826982479919317013, 812293377956773918, 810822858442801172, 810822856853946408, 810822851748823040, 810822854018203658} # Minecraft, VC, various Sanctums
