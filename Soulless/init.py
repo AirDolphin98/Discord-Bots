@@ -8,8 +8,8 @@ auto_channels = [935073825845043251, 1092091357771878453] # ai-lounge, ai-lounge
 reply_only_chs = [793737732391698453, 794981260354125854, 794982796690194462, 794981280768065566, 810818009891209238, 810817926742540288, 810067909429821440, 810005722342752266] # bots, philosophy, psychology, politics, religion, social-science, natural-science, formal-science
 
 discord_msg_char_limit = 2000
-chat_model = "gpt-5"
-ques_model = "gpt-5-nano"
+chat_model = "gpt-4.1"
+ques_model = "gpt-4.1-nano"
 pref_temp = 1
 pref_summ_temp = 0.7
 token_limit = 128000 # for gpt-4o-mini
