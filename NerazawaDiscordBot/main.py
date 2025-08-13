@@ -1166,7 +1166,7 @@ async def dump_database(interaction: discord.Interaction):
         )
         return
 
-    database_path = abs_path_of("data\\main1.json")
+    database_path = abs_path_of("data\\main.json")
     if not os.path.exists(database_path):
         await interaction.response.send_message(
             "Couldn't find database file sorry!",
@@ -1185,7 +1185,7 @@ async def dump_database(interaction: discord.Interaction):
         )
         return
 
-    attachment = discord.File(database_path, "main1.json")
+    attachment = discord.File(database_path, "main.json")
 
 
     await interaction.response.send_message(

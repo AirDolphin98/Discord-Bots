@@ -6,7 +6,7 @@ from datetime import datetime
 
 def abs_path_of(filename: str):
     """Assumes filename is a file/folder in the same directory as this"""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename.removeprefix("./"))
 
 
 class JSONDatabase:
@@ -467,7 +467,7 @@ def is_ticket_channel(channel: discord.TextChannel|None|AllChannelTypes):
 
 
 if __name__ == "__main__":
-    db = JSONDatabase("data/main1.json")
+    db = JSONDatabase("data/main.json")
     db.prettifier()
     egg = db.easter_egg(1)
     print(egg.is_unlocked(123))
