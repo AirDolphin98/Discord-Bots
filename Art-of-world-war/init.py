@@ -7,8 +7,8 @@ auto_channels = []
 reply_only_chs = [670090775606067227, 670090977356021780, 747948622389182515] # bot-commands, server-commands, political
 
 discord_msg_char_limit = 2000
-chat_model = "gpt-4.1"
-ques_model = "gpt-4.1-nano"
+chat_model = "gpt-5"
+ques_model = "gpt-5-nano"
 pref_temp = 1
 pref_summ_temp = 0.7
 token_limit = 128000 # for gpt-4o-mini

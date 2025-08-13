@@ -58,9 +58,10 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
     global member_vc_times
     timestamp = datetime.now(dt.timezone.utc)
 
-    member_ids = member_vc_times.copy().keys() # To stop `RuntimeError: dictionary keys changed during iteration`
+    member_ids = list(member_vc_times.keys()) # To stop `RuntimeError: dictionary keys changed during iteration`
     if specific_member_id:
-        member_id = [specific_member_id]
+        member_ids = [specific_member_id]
+
     for member_id in member_ids:
 
         data = member_vc_times.pop(member_id)
@@ -69,7 +70,8 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
         
         difference = timestamp - start_time
         seconds_in_vc = difference.total_seconds()
-        DATABASE.set_vc_duration(member_id, channel_id, seconds_in_vc)
+        prev_total = DATABASE.get_total_vc_duration(member_id, channel_id) or 0
+        DATABASE.set_vc_duration(member_id, channel_id, prev_total + seconds_in_vc)
         DATABASE.commit()
         
         if not remove_from_dict:
@@ -295,7 +297,6 @@ async def cleanup(interaction: discord.Interaction, amount: int):
         await command_error("I don't have permission to delete messages in this channel.", interaction=interaction, followup=True)
     except Exception as e:
         await command_error(f"Unexpected error: {e}", interaction=interaction, followup=True)
-
 
 target = datetime(2026, 12, 23, 12, 34, 20, 0)
 @bot.tree.command(name="countdown", description="How much time is left until the countdown finishes..")

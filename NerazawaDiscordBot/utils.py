@@ -181,6 +181,17 @@ class JSONDatabase:
 
         self.set_user(user_id, user)
 
+    def get_total_vc_duration(self, user_id: int|str, channel_id: int|str) -> float|int:
+        """
+        Get total VC duration, and longest VC duration of a specific user for a specific channel.
+        """
+        user = self.user(user_id)
+
+        self._add_missing_vc_duration_channel(user_id, channel_id)
+
+        return user["vc_durations"][channel_id]["total_time_seconds"]
+
+
     def add_warning(self, user_id: int|str, warning_message: str, moderator_id: int):
         warnings = self.get_warnings(user_id)
         warnings.append({
