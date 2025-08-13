@@ -42,6 +42,7 @@ intents.message_content = True
 intents.voice_states = True
 intents.members = True
 
+scheduler = AsyncIOScheduler()
 save_database_on_exit = True
 
 bot = commands.Bot(intents=intents, command_prefix="/")
@@ -1216,6 +1217,10 @@ async def exit_without_database_save(interaction: discord.Interaction):
     )
     save_database_on_exit = False
     member_vc_times.clear() # Avoid any chance of data overriding the physical database file.
+    
+    print("Nerazawa Bot: Shutting down backup scheduler as the bot is exiting without saving!")
+    scheduler.shutdown(wait=False)  # Stop scheduled backups if used
+
     await bot.close()
 
 
@@ -1653,6 +1658,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 @bot.event
 async def on_ready():
+    global scheduler
 
     await bot.tree.sync() # Sync tree command structure
 
@@ -1660,10 +1666,10 @@ async def on_ready():
 
     print(f"[GREEN]Logged in as {bot.user}")
     
-    scheduler = AsyncIOScheduler()
     scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
     scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
     scheduler.start()
+
     print("Scheduler setup!")
 
     await check_bdays()

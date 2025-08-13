@@ -18,7 +18,7 @@ class JSONDatabase:
         """Loads JSON database"""
         if cls._instance is None:
             cls._instance = super(JSONDatabase, cls).__new__(cls)
-            cls._instance._load(file_path)
+        cls._instance._load(file_path)
         return cls._instance
 
     def _load(self, file_path):
