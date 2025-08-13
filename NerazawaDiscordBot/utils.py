@@ -12,6 +12,7 @@ def abs_path_of(filename: str):
 class JSONDatabase:
     _instance = None
     file_path = None
+    data = {}
 
     def __new__(cls, file_path: str):
         """Loads JSON database"""

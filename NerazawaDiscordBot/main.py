@@ -74,15 +74,17 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
         seconds_in_vc = difference.total_seconds()
         prev_total = DATABASE.get_total_vc_duration(member_id, channel_id) or 0
         DATABASE.set_vc_duration(member_id, channel_id, prev_total + seconds_in_vc)
-        DATABASE.commit()
         
         if not remove_from_dict:
             # Re-add member id since we popped it previously - but using the new timestamp
             member_vc_times[member_id] = {"start_time":timestamp, "channel_id":channel_id}
         if specific_member_id:
             return difference, seconds_in_vc
+    DATABASE.commit()
+
 
 def on_exit():
+    global save_database_on_exit
     """Please don't ever save corrupted data please programmer gods 🙏🙏"""
     if save_database_on_exit:
         update_vc_times(remove_from_dict=True) # Assume they left the VC since the bot has exited and we can't keep tracking them
@@ -1213,6 +1215,7 @@ async def exit_without_database_save(interaction: discord.Interaction):
         ephemeral=True
     )
     save_database_on_exit = False
+    member_vc_times.clear() # Avoid any chance of data overriding the physical database file.
     await bot.close()
 
 
