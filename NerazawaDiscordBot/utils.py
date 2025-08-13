@@ -467,7 +467,7 @@ def is_ticket_channel(channel: discord.TextChannel|None|AllChannelTypes):
 
 
 if __name__ == "__main__":
-    db = JSONDatabase("data/main.json")
+    db = JSONDatabase("data/main1.json")
     db.prettifier()
     egg = db.easter_egg(1)
     print(egg.is_unlocked(123))
