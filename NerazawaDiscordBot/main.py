@@ -42,6 +42,8 @@ intents.message_content = True
 intents.voice_states = True
 intents.members = True
 
+save_database_on_exit = True
+
 bot = commands.Bot(intents=intents, command_prefix="/")
 
 member_vc_times: dict[int, dict] = {
@@ -82,8 +84,9 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
 
 def on_exit():
     """Please don't ever save corrupted data please programmer gods 🙏🙏"""
-    DATABASE.commit()
-    update_vc_times(remove_from_dict=True) # Assume they left the VC since the bot has exited and we can't keep tracking them
+    if save_database_on_exit:
+        update_vc_times(remove_from_dict=True) # Assume they left the VC since the bot has exited and we can't keep tracking them
+        DATABASE.commit()
     # backup_task.stop()
 atexit.register(on_exit)
 
@@ -1191,6 +1194,58 @@ async def dump_database(interaction: discord.Interaction):
         ephemeral=True
     )
 
+@bot.tree.command(name="exit_without_database_save", description="Deactivate the bot without overriding the database file! WARNING DANGEROUS IF MISUSED!")
+@has_role(ADMIN_ROLE_NAME)
+async def exit_without_database_save(interaction: discord.Interaction):
+    global save_database_on_exit
+
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    
+    if not verified_user:
+        await interaction.response.send_message(
+            "Sorry but only specific users can use this command! These users include: Nerazawa, AAphid, and AirDolphin98",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        content="Exiting without saves to main.json...",
+        ephemeral=True
+    )
+    save_database_on_exit = False
+    await bot.close()
+
+
+@bot.tree.command(name="reload_database", description="Reloads the *physical* database file into memory! Override the current database stored in memory.")
+@has_role(ADMIN_ROLE_NAME)
+async def reload_database(interaction: discord.Interaction):
+    global save_database_on_exit
+
+    await interaction.response.defer()
+
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    if not verified_user:
+        await interaction.followup.send(
+            content="Sorry but only specific users can use this command! These users include: Nerazawa, AAphid, and AirDolphin98",
+            ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        content="Reloading database to main.json file...",
+        ephemeral=True
+    )
+
+    # Reload database
+    DATABASE.reload_from_file()
+    DATABASE.verify_users_database()
+    DATABASE.commit()
+
+    await interaction.followup.send(
+        content="Reloaded database!",
+        ephemeral=True
+    )
+
 
 @bot.tree.command(name="setbirthday", description="Set your birthday so that we can wish you a happy birthday when it happens!")
 @app_commands.describe(
@@ -1503,7 +1558,11 @@ statements_and_responses = {
     "Awww hell yea man! How are the wife and kids man?": "You won't BELIEVE what happened bro. They died.",
     "They died.?": "Hell yea man it was hella awesome bro! They got goddamn blended.",
     "Man.. that's.. so F%^&*ing sick man! What a crazy way to go out man.": "Ikr man wish it could of been us man. Missed opportunity man.",
-    "Anyways cya man": "Yea cya gang"
+    "Anyways cya man": "Yea cya gang",
+
+    "OMG WHY AREN'T YOU WORKING": "Aww I'm sorry :pleading_face:",
+    "YOU SUCK ARGHH": "Please I promise I'll work!! Just give me a chance",
+    "Nah I'm just kidding! xd": "oh..",
 }
 @bot.event
 async def on_message(message: discord.Message):

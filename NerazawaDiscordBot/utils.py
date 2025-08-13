@@ -25,6 +25,9 @@ class JSONDatabase:
             self.data: dict = json.load(f)
             self.file_path = file_path
 
+    def reload_from_file(self):
+        self._load(self.file_path)
+
     def get(self, key, default=None):
         return self.data.get(key, default)
 
