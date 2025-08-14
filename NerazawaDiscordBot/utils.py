@@ -6,12 +6,12 @@ from datetime import datetime
 
 def abs_path_of(filename: str):
     """Assumes filename is a file/folder in the same directory as this"""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename.removeprefix("./"))
+    return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), filename.removeprefix("./")))
 
 
 class JSONDatabase:
     _instance = None
-    file_path = None
+    file_path: str = "./data/main.json"
     data = {}
 
     def __new__(cls, file_path: str):
@@ -22,12 +22,22 @@ class JSONDatabase:
         return cls._instance
 
     def _load(self, file_path):
+        print(f"Loading database from: {file_path}")
         with open(abs_path_of(file_path), 'r') as f:
             self.data: dict = json.load(f)
             self.file_path = file_path
+        print(f"Database loaded successfully. Users count: {len(self.data.get('users', {}))}")
 
-    def reload_from_file(self):
-        self._load(self.file_path)
+    def reload_from_file(self, filepath:str|None=None):
+        if self.file_path or filepath:
+            if filepath is not None:
+                print("Reloading database from given file path (most likely a backup)...")
+                self._load(filepath)
+            else:
+                print(f"Reloading database from starting file...")
+                self._load(self.file_path)
+        else:
+            print("No file path set for database reload!")
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -70,6 +80,8 @@ class JSONDatabase:
         -   `vc_durations`
         -   `birthday`
         -   `warnings`
+        
+        Also fixes duplicate channel IDs in vc_durations by merging the data.
         """
         users = self.users()
         for u_id in users:
@@ -81,32 +93,38 @@ class JSONDatabase:
                 print("Added missing `unlocked_easter_eggs` key!")
                 user["unlocked_easter_eggs"] = []
             
-            # VC DURATIONS
+            # VC DURATIONS - Fix duplicates first
             if "vc_durations" not in user.keys():
                 print("Added missing `vc_durations` key!")
                 user["vc_durations"] = {}
+            else:
+                # Fix duplicate channel IDs by merging data
+                user["vc_durations"] = self._fix_duplicate_vc_channels(user["vc_durations"], u_id)
 
+            # Now process each channel normally
             for channel_id in user["vc_durations"].keys():
                 data: dict = user["vc_durations"][channel_id]
                 has_longest_duration_value = "longest_duration_seconds" in data.keys()
                 has_total_duration_value = "total_time_seconds" in data.keys()
+                
                 if not has_longest_duration_value:
-                    print("Added missing `longest_duration_seconds` in `vc_durations`")
+                    print(f"Added missing `longest_duration_seconds` in `vc_durations` for user {u_id}")
                     if has_total_duration_value:
-                        data["longest_duration_seconds"] = data["total_time_seconds"] # Use total_time_seconds if we have that instead
+                        data["longest_duration_seconds"] = data["total_time_seconds"]
                     else:
-                        data["longest_duration_seconds"] = 0 # Don't have any VC data for this channel so we set as 0 
+                        data["longest_duration_seconds"] = 0
 
                 if not has_total_duration_value:
-                    print("Added missing `total_time_seconds` in `vc_durations`")
+                    print(f"Added missing `total_time_seconds` in `vc_durations` for user {u_id}")
                     if has_longest_duration_value:
-                        data["total_time_seconds"] = data["longest_duration_seconds"] # Use longest_duration_seconds if we have that instead
+                        data["total_time_seconds"] = data["longest_duration_seconds"]
                     else:
-                        data["total_time_seconds"] = 0 # Don't have any VC data for this channel so we set as 0
+                        data["total_time_seconds"] = 0
+                        
                 if has_longest_duration_value and has_total_duration_value:
-                    # Fix if total time is less than the longest recorded time because how tf would that work
+                    # Fix if total time is less than the longest recorded time
                     if data["total_time_seconds"] < data["longest_duration_seconds"]:
-                        print("Fixed `total_time_seconds` being less than `longest_duration_seconds`")
+                        print(f"Fixed `total_time_seconds` being less than `longest_duration_seconds` for user {u_id}")
                         data["total_time_seconds"] = data["longest_duration_seconds"]
 
             # BIRTHDAY
@@ -119,9 +137,45 @@ class JSONDatabase:
                 print("Added missing `warnings` key!")
                 user["warnings"] = []
 
-            # Set user with fixed data - (will automatically use `set_users` as well)
+            # Set user with fixed data
             self.set_user(u_id, user)
-            
+
+    def _fix_duplicate_vc_channels(self, vc_durations: dict, user_id: str) -> dict:
+        """
+        Fix duplicate channel IDs in vc_durations by merging the data.
+        Takes the maximum longest_duration_seconds and sums total_time_seconds.
+        """
+        # Convert to a format we can work with to detect duplicates
+        channel_data = {}
+        
+        # Read through the raw JSON data to collect all instances
+        for channel_id, data in vc_durations.items():
+            if channel_id not in channel_data:
+                channel_data[channel_id] = {
+                    "longest_duration_seconds": data.get("longest_duration_seconds", 0),
+                    "total_time_seconds": data.get("total_time_seconds", 0),
+                    "instances": 1
+                }
+            else:
+                
+                # Take the maximum longest duration
+                current_longest = channel_data[channel_id]["longest_duration_seconds"]
+                new_longest = data.get("longest_duration_seconds", 0)
+                channel_data[channel_id]["longest_duration_seconds"] = max(current_longest, new_longest)
+                
+                # Add to total time (this is the most logical approach)
+                channel_data[channel_id]["total_time_seconds"] += data.get("total_time_seconds", 0)
+        
+        # Return clean data without the 'instances' tracking
+        clean_data = {}
+        for channel_id, data in channel_data.items():
+            clean_data[channel_id] = {
+                "longest_duration_seconds": data["longest_duration_seconds"],
+                "total_time_seconds": data["total_time_seconds"]
+            }
+        
+        return clean_data
+
     def easter_eggs(self) -> dict:
         return self.data["easter_eggs"]
 
@@ -132,6 +186,9 @@ class JSONDatabase:
         return EasterEgg(egg_id, self)
 
     def unlock_easter_egg(self, user_id: int|str, egg_id: int|str, timestamp: float|int):
+        """
+        Unlocks a easter egg and logs it into the database so they don't unlock it again.
+        """
         user = self.user(str(user_id))
 
         unlocked_eggs: list = user["unlocked_easter_eggs"]
@@ -168,10 +225,10 @@ class JSONDatabase:
 
         return user["vc_durations"][channel_id]
 
-    def set_vc_duration(self, user_id: int|str, channel_id: int|str, length_seconds: int|float, add_to_total_time: bool=False):
+    def new_vc_duration(self, user_id: int|str, channel_id: int|str, length_seconds: int|float):
         """
-        Used to override `longest_duration_seconds` value.
-        Also adds `length_seconds` `total_time_seconds` value if `add_to_total_time` is True.
+        Override `longest_duration_seconds` value if given value is longer.
+        Also adds `length_seconds` to `total_time_seconds` value for this VC.
 
         Please use `set_vc_duration` instead so that it can check automatically if the length is longer.
         """
@@ -179,15 +236,17 @@ class JSONDatabase:
         self._add_missing_vc_duration_channel(user_id, channel_id)
         user = self.user(user_id)
 
-        user["vc_durations"][channel_id]["longest_duration_seconds"] = length_seconds
-        total_time_seconds = user["vc_durations"][channel_id]["total_time_seconds"] + length_seconds
+        if length_seconds > user["vc_durations"][channel_id]["longest_duration_seconds"]:
+            user["vc_durations"][channel_id]["longest_duration_seconds"] = length_seconds
+
+        total_time_seconds = self.get_total_vc_duration(user_id, channel_id) + length_seconds
         user["vc_durations"][channel_id]["total_time_seconds"] = total_time_seconds
 
         self.set_user(user_id, user)
 
     def get_total_vc_duration(self, user_id: int|str, channel_id: int|str) -> float|int:
         """
-        Get total VC duration, and longest VC duration of a specific user for a specific channel.
+        Get the total seconds a user has been in a VC channel. (`total_time_seconds` value)
         """
         user = self.user(user_id)
 
@@ -333,13 +392,14 @@ class JSONDatabase:
         
 
         target_path = filepath if filepath else self.file_path
+        target_path = abs_path_of(target_path)
 
-        head, _ = os.path.split(target_path) # type: ignore
-        head = abs_path_of(head)
-        if not os.path.exists(head): # type: ignore
+        head, _ = os.path.split(target_path)
+        if not os.path.exists(head): 
             os.makedirs(head, exist_ok=True)
 
-        with open(abs_path_of(target_path), "w", encoding="utf-8") as f: # type: ignore
+        print("Nerasawa Bot: Committing here:", target_path)
+        with open(abs_path_of(target_path), "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=4)
 
         
@@ -446,8 +506,9 @@ async def find_category(name, guild: discord.Guild) -> discord.CategoryChannel:
     )
     # Create category if missing
     if tickets_category is None:
+        print("Nerazawa Bot: Creating missing tickets category...")
         tickets_category = await guild.create_category(name=name)
-        print("Created missing tickets category!")
+        print("Nerazawa Bot: Created missing tickets category!")
     
     return tickets_category
 

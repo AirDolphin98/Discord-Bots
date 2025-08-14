@@ -8,7 +8,7 @@ auto_channels = [1108789877752995841, 1108908755309051994] # ai-chatbot, #slug-c
 reply_only_chs = []
 
 discord_msg_char_limit = 2000
-chat_model = "gpt-5-"
+chat_model = "gpt-4.1"
 ques_model = "gpt-5-nano"
 pref_temp = 1
 pref_summ_temp = 0.7

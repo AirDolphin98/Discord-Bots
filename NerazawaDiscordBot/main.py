@@ -31,8 +31,15 @@ with open(abs_path_of("auth.json")) as auth, open(abs_path_of("config.json")) as
     del CONFIG
 
 DATABASE = JSONDatabase(DATABASE_PATH)
+
+member_vc_times: dict[int, dict] = {
+    # MEMBER_ID: {
+    #   "start_time": StartTimeDateTime,
+    #   "channel_id": INT,
+}
+
 DATABASE.verify_users_database()
-DATABASE.commit()
+DATABASE.commit() # NOTE: Is this causing the ghost file???
 
 ZERO_WIDTH_CHAR = "\u200b"
 
@@ -47,11 +54,7 @@ save_database_on_exit = True
 
 bot = commands.Bot(intents=intents, command_prefix="/")
 
-member_vc_times: dict[int, dict] = {
-    # MEMBER_ID: {
-    #   "start_time": StartTimeDateTime,
-    #   "channel_id": INT,
-}
+
 
 ################################################
 # MISC FUNCTIONS
@@ -61,7 +64,7 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
     global member_vc_times
     timestamp = datetime.now(dt.timezone.utc)
 
-    member_ids = list(member_vc_times.keys()) # To stop `RuntimeError: dictionary keys changed during iteration`
+    member_ids = list(member_vc_times.keys())
     if specific_member_id:
         member_ids = [specific_member_id]
 
@@ -73,16 +76,14 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
         
         difference = timestamp - start_time
         seconds_in_vc = difference.total_seconds()
-        prev_total = DATABASE.get_total_vc_duration(member_id, channel_id) or 0
-        DATABASE.set_vc_duration(member_id, channel_id, prev_total + seconds_in_vc)
+        DATABASE.new_vc_duration(member_id, channel_id, seconds_in_vc)
         
         if not remove_from_dict:
             # Re-add member id since we popped it previously - but using the new timestamp
             member_vc_times[member_id] = {"start_time":timestamp, "channel_id":channel_id}
         if specific_member_id:
             return difference, seconds_in_vc
-    DATABASE.commit()
-
+    
 
 def on_exit():
     global save_database_on_exit
@@ -98,6 +99,7 @@ async def backup_task():
     print(f"Nerazawa Bot: Creating backup! - {now}")
     update_vc_times(remove_from_dict=False) # Bot still online so we can let there times continue - so don't remove
     DATABASE.backup()
+    DATABASE.commit()
 
 async def found_easter_egg(member: discord.User | discord.Member, *, easter_egg_id: str|int):
     egg = DATABASE.easter_egg(easter_egg_id)
@@ -332,12 +334,6 @@ async def countdown(interaction: discord.Interaction):
     embed = discord.Embed(title=f"The Countdown", description=description, color=discord.Colour.dark_magenta(), timestamp=datetime.now())
     
     await interaction.response.send_message(embed=embed)
-
-# TODO: Complete functionality
-# @bot.tree.command(name="ticket", description="Create a ticket to contact staff!")
-# async def ticket(interaction: discord.Interaction):
-#     pass
-
 
 @bot.tree.command(name="credits", description="Credits for the creation of this bot.")
 @app_commands.describe(
@@ -1013,6 +1009,7 @@ async def help(interaction: discord.Interaction):
 @app_commands.describe(
     leaderboard="The leaderboard you want to check! TOP: Longest channel VC time, TOTAL: Total VC time globally."
 )
+@app_commands.checks.cooldown(1, 2, key=lambda i: i.user.id)
 async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatType=VCStatType.total):
     await interaction.response.defer()
 
@@ -1164,7 +1161,7 @@ async def dump_database(interaction: discord.Interaction):
     
     if not verified_user:
         await interaction.response.send_message(
-            "Sorry but only specific users can use this command! These users include: Nerazawa, AAphid, and AirDolphin98",
+            "Sorry but only specific users can use this command!",
             ephemeral=True
         )
         return
@@ -1206,7 +1203,7 @@ async def exit_without_database_save(interaction: discord.Interaction):
     
     if not verified_user:
         await interaction.response.send_message(
-            "Sorry but only specific users can use this command! These users include: Nerazawa, AAphid, and AirDolphin98",
+            "Sorry but only specific users can use this command!",
             ephemeral=True
         )
         return
@@ -1234,7 +1231,7 @@ async def reload_database(interaction: discord.Interaction):
     verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
     if not verified_user:
         await interaction.followup.send(
-            content="Sorry but only specific users can use this command! These users include: Nerazawa, AAphid, and AirDolphin98",
+            content="Sorry but only specific users can use this command!",
             ephemeral=True
         )
         return
@@ -1247,13 +1244,99 @@ async def reload_database(interaction: discord.Interaction):
     # Reload database
     DATABASE.reload_from_file()
     DATABASE.verify_users_database()
-    DATABASE.commit()
 
     await interaction.followup.send(
-        content="Reloaded database!",
+        content=f"Database reloaded! Found {len(DATABASE.users())} users. **Note: Changes not yet committed to file. (Run `/commit_database` to commit data)**",
         ephemeral=True
     )
 
+@bot.tree.command(name="commit_database", description="Commits database in memory into the physical database file!")
+@has_role(ADMIN_ROLE_NAME)
+async def commit_database(interaction: discord.Interaction):
+    
+    await interaction.response.defer()
+
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    if not verified_user:
+        await interaction.followup.send(
+            content="Sorry but only specific users can use this command!",
+            ephemeral=True
+        )
+        return
+
+    DATABASE.commit()
+
+    await interaction.followup.send(
+        content=f"Database committed! Found {len(DATABASE.users())} users.",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="backup_database", description="Manually cause a backup of the databasess!")
+@has_role(ADMIN_ROLE_NAME)
+async def backup_database(interaction: discord.Interaction):
+    
+    await interaction.response.defer()
+
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    if not verified_user:
+        await interaction.followup.send(
+            content="Sorry but only specific users can use this command!",
+            ephemeral=True
+        )
+        return
+
+    DATABASE.backup()
+
+    await interaction.followup.send(
+        content=f"Database committed! Found {len(DATABASE.users())} users.",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="restore_from_backup", description="Revert the current database to one of the backups!")
+@has_role(ADMIN_ROLE_NAME)
+@app_commands.describe(
+    day="The day of the backup you are trying to restore",
+    month="The month of the backup you are trying to restore",
+    year="The year of the backup you are trying to restore"
+)
+async def restore_from_backup(interaction: discord.Interaction, day:int, month:int, year:int):
+    
+    await interaction.response.defer()
+
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    if not verified_user:
+        await interaction.followup.send(
+            content="Sorry but only specific users can use this command!",
+            ephemeral=True
+        )
+        return
+
+    backup_folder_path = abs_path_of(f"data/backups/{year}-{month}-{day}/")
+
+    if not os.path.exists(backup_folder_path):
+        await interaction.followup.send(
+            content="Sorry but that date given does not have any backups!",
+            ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        content="THIS COMMAND IS NOT COMPLETE!",
+        ephemeral=True
+    )
+    return
+
+    # TODO: Add selection of what backup to restore from - hours, minutes, seconds
+    os.listdir(backup_folder_path)[0]#?
+
+
+    DATABASE.reload_from_file()
+
+    await interaction.followup.send(
+        content=f"Database committed! Found {len(DATABASE.users())} users.",
+        ephemeral=True
+    )
 
 @bot.tree.command(name="setbirthday", description="Set your birthday so that we can wish you a happy birthday when it happens!")
 @app_commands.describe(
@@ -1287,7 +1370,7 @@ async def set_birthday(interaction: discord.Interaction, day: int, month: int, t
 
 
 
-ticket_commands = app_commands.Group(name="ticket", description="This is a description.")
+ticket_commands = app_commands.Group(name="ticket", description="Ticket commands")
 
 @ticket_commands.command(name="create", description="Give suggestions or report something to the mods!")
 @app_commands.describe(
@@ -1649,10 +1732,13 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         }
     elif exited_vc and isinstance(before.channel, discord.VoiceChannel) and we_have_there_start_time: # Isinstance check is to stop type hinting error.
         out = update_vc_times(specific_member_id=member.id, remove_from_dict=True)
+        
         if out == None: 
             print(f"VC exit time for {member.name} was None even though this should never happen!?")
             return # Should never happen - this is purely for type hinting
         difference, seconds_in_vc = out
+
+        DATABASE.commit()
 
         # print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
 
