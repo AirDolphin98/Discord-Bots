@@ -149,6 +149,10 @@ class JSONDatabase:
             # Set user with fixed data
             self.set_user(u_id, user)
 
+        if "easter_eggs" in list(self.data.keys()):
+            print("Easter eggs are now stored in a seperate file so removing from main.json!")
+            self.data.pop("easter_eggs")
+
     def _fix_duplicate_vc_channels(self, vc_durations: dict, user_id: str) -> dict:
         """
         Fix duplicate channel IDs in vc_durations by merging the data.
