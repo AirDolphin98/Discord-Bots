@@ -2,7 +2,7 @@ from __future__ import annotations # Allows type hinting classes that haven't be
 import json, os, pprint, discord, typing
 from enum import Enum
 from datetime import datetime
-
+import datetime as dt
 
 def abs_path_of(filename: str):
     """Assumes filename is a file/folder in the same directory as this"""
@@ -108,7 +108,7 @@ class JSONDatabase:
                 user["vc_durations"] = {}
             else:
                 # Fix duplicate channel IDs by merging data
-                user["vc_durations"] = self._fix_duplicate_vc_channels(user["vc_durations"], u_id)
+                user["vc_durations"] = self._validate_vc_data(user["vc_durations"])
 
             # Now process each channel normally
             for channel_id in user["vc_durations"].keys():
@@ -153,39 +153,45 @@ class JSONDatabase:
             print("Easter eggs are now stored in a seperate file so removing from main.json!")
             self.data.pop("easter_eggs")
 
-    def _fix_duplicate_vc_channels(self, vc_durations: dict, user_id: str) -> dict:
-        """
-        Fix duplicate channel IDs in vc_durations by merging the data.
-        Takes the maximum longest_duration_seconds and sums total_time_seconds.
-        """
-        # Convert to a format we can work with to detect duplicates
-        channel_data = {}
+    def _validate_vc_data(self, vc_durations: dict) -> dict:
+        """Clean VC data by removing duplicates!"""
+        seen_channels = set()
+        clean_data = {}
         
-        # Read through the raw JSON data to collect all instances
         for channel_id, data in vc_durations.items():
-            if channel_id not in channel_data:
-                channel_data[channel_id] = {
-                    "longest_duration_seconds": data.get("longest_duration_seconds", 0),
-                    "total_time_seconds": data.get("total_time_seconds", 0),
-                    "instances": 1
+            channel_id: int|str
+            data: dict
+            channel_id_str = str(channel_id)
+            
+            if channel_id_str in seen_channels:
+                # THIS IS A DUPLICATE CHANNEL
+
+                # Merge with existing entry
+                existing = clean_data[channel_id_str]
+
+                # Determine if current longest is bigger then duplicate longest - set which ever is bigger to be the true longest
+                true_longest = max(
+                    existing["longest_duration_seconds"],
+                    data.get("longest_duration_seconds", 0)
+                ),
+
+                # The total time added with the duplicate
+                total_total = existing["total_time_seconds"] + data.get("total_time_seconds", 0)
+
+                # Add values to cleaned
+                clean_data[channel_id_str] = {
+                    "longest_duration_seconds": true_longest,
+                    "total_time_seconds": total_total
                 }
             else:
-                
-                # Take the maximum longest duration
-                current_longest = channel_data[channel_id]["longest_duration_seconds"]
-                new_longest = data.get("longest_duration_seconds", 0)
-                channel_data[channel_id]["longest_duration_seconds"] = max(current_longest, new_longest)
-                
-                # Add to total time (this is the most logical approach)
-                channel_data[channel_id]["total_time_seconds"] += data.get("total_time_seconds", 0)
-        
-        # Return clean data without the 'instances' tracking
-        clean_data = {}
-        for channel_id, data in channel_data.items():
-            clean_data[channel_id] = {
-                "longest_duration_seconds": data["longest_duration_seconds"],
-                "total_time_seconds": data["total_time_seconds"]
-            }
+                # Haven't check this channel so it isn't a duplicate (yet)!
+                # So set as whatever is given or 0
+                clean_data[channel_id_str] = {
+                    "longest_duration_seconds": data.get("longest_duration_seconds", 0),
+                    "total_time_seconds": data.get("total_time_seconds", 0)
+                }
+                # So that we know any further occurrences are duplicates!!
+                seen_channels.add(channel_id_str)
         
         return clean_data
 
@@ -218,9 +224,9 @@ class JSONDatabase:
         """
         user = self.user(user_id)
 
-        vc_durations: dict = user["vc_durations"]
+        vc_durations: dict = user.get("vc_durations", {})
         if channel_id not in vc_durations.keys():
-            vc_durations[channel_id] = {
+            vc_durations[str(channel_id)] = {
                 "longest_duration_seconds": 0,
                 "total_time_seconds": 0
             }
@@ -246,15 +252,28 @@ class JSONDatabase:
         Please use `set_vc_duration` instead so that it can check automatically if the length is longer.
         """
         user = self.user(user_id)
-        self._add_missing_vc_duration_channel(user_id, channel_id)
-        user = self.user(user_id)
-
-        if length_seconds > user["vc_durations"][channel_id]["longest_duration_seconds"]:
-            user["vc_durations"][channel_id]["longest_duration_seconds"] = length_seconds
-
-        total_time_seconds = self.get_total_vc_duration(user_id, channel_id) + length_seconds
-        user["vc_durations"][channel_id]["total_time_seconds"] = total_time_seconds
-
+        
+        # Check VC channel exists
+        if str(channel_id) not in user.get("vc_durations", {}):
+            if "vc_durations" not in user:
+                user["vc_durations"] = {}
+            user["vc_durations"][str(channel_id)] = {
+                "longest_duration_seconds": 0,
+                "total_time_seconds": 0
+            }
+        
+        # Get current VC data for that user
+        channel_data = user["vc_durations"][str(channel_id)]
+        
+        # If new length_seconds is longer set it as the new longest_duration_seconds record for that VC
+        channel_data["longest_duration_seconds"] = max(
+            channel_data["longest_duration_seconds"], 
+            length_seconds
+        )
+        # Add time to total seconds
+        channel_data["total_time_seconds"] += length_seconds
+        
+        # Set new data back into user
         self.set_user(user_id, user)
 
     def get_total_vc_duration(self, user_id: int|str, channel_id: int|str) -> float|int:
@@ -360,7 +379,7 @@ class JSONDatabase:
             print("[WARN] No file path has been set for database! This could lead to missing data as it cannot be committed to the file!")
             return
         
-        now = datetime.now()
+        now = datetime.now(dt.timezone.utc)
 
         timestamp = now.strftime("%Y-%m-%d_%H-%M-%S") # Must be filepath friendly
 
@@ -466,7 +485,7 @@ class EasterEgg():
         return False     
 
     def unlock(self, user_id):
-        self.db.unlock_easter_egg(user_id, self.id, datetime.now().timestamp())
+        self.db.unlock_easter_egg(user_id, self.id, datetime.now(dt.timezone.utc).timestamp())
 
     def get_data(self):
         return self.egg_data
@@ -507,7 +526,7 @@ async def command_error(reason: str, *, interaction: discord.Interaction, follow
 
     description = "There was an error running the given command."
 
-    embed = discord.Embed(title=f"Error while running command!", description=description, color=discord.Colour.orange(), timestamp=datetime.now())
+    embed = discord.Embed(title=f"Error while running command!", description=description, color=discord.Colour.orange(), timestamp=datetime.now(dt.timezone.utc))
     embed.add_field(name="Reason", value=reason)
 
     if followup:
