@@ -7,5 +7,6 @@
     },
     "happy_birthday_channel_id": 1338853348530454550,
     "tickets_category_name": "tickets",
-    "archived_tickets_category_name": "completed_tickets"
+    "archived_tickets_category_name": "completed_tickets",
+    "easter_eggs_database_path": "./data/static/easter_eggs.json"
 }
