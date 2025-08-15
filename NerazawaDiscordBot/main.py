@@ -12,10 +12,13 @@ from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
 from utils import JSONDatabase, abs_path_of, VCStatType, find_role, has_role, command_error, find_category, is_ticket_channel
+from modals import FileSelectView
 from pprint import pprint
 
 
-with open(abs_path_of("auth.json")) as auth, open(abs_path_of("config.json")) as config:
+with open(abs_path_of("auth.json")) as auth, \
+        open(abs_path_of("config.json")) as config:
+    
     AUTH_CONFIG = json.load(auth)
     TOKEN: str = AUTH_CONFIG["bot_token"]
     del AUTH_CONFIG
@@ -23,14 +26,17 @@ with open(abs_path_of("auth.json")) as auth, open(abs_path_of("config.json")) as
     CONFIG = json.load(config)
     MAX_JISHO_RESULTS: int = CONFIG["max_jisho_results"]
     ADMIN_ROLE_NAME: str = CONFIG["staff_role"]
-    DATABASE_PATH: str = CONFIG["database_path"]
+    DATABASE_PATH: str = abs_path_of(CONFIG["database_path"])
     DATABASE_BACKUP_DELAY_HOURS: int = CONFIG["backups_config"]["delay_hours"]
     BIRTHDAY_CHANNEL_ID: int = CONFIG["happy_birthday_channel_id"]
     TICKETS_CATEGORY_NAME: str = CONFIG["tickets_category_name"]
     ARCHIVED_TICKETS_CATEGORY_NAME: str = CONFIG["archived_tickets_category_name"]
+    
+    EASTER_EGGS_DATABASE_PATH = abs_path_of(CONFIG["easter_eggs_database_path"])
+    
     del CONFIG
 
-DATABASE = JSONDatabase(DATABASE_PATH)
+DATABASE = JSONDatabase(DATABASE_PATH, EASTER_EGGS_DATABASE_PATH)
 
 member_vc_times: dict[int, dict] = {
     # MEMBER_ID: {
@@ -287,11 +293,11 @@ async def cleanup(interaction: discord.Interaction, amount: int):
         await found_easter_egg(interaction.user, easter_egg_id=4)
 
     if not isinstance(interaction.channel, discord.TextChannel):
-        await command_error("Can not run cleanup command in this channel. Please run the command in a text channel.", interaction=interaction)
+        await command_error("Can not run cleanup command in this channel. Please run the command in a text channel.", interaction=interaction, followup=True)
         return
     
     if interaction.guild is None:
-        await command_error("Cannot access your current guild (discord server).", interaction=interaction)
+        await command_error("Cannot access your current guild (discord server).", interaction=interaction, followup=True)
         return
 
     if not interaction.channel.permissions_for(interaction.guild.me).manage_messages:
@@ -1153,7 +1159,10 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="dump_database", description="Dumps the database file! Authorised users only >:L")
+database_commands = app_commands.Group(name="database", description="Database commands")
+
+
+@database_commands.command(name="dump", description="Dumps the database file! Authorised users only >:L")
 @has_role(ADMIN_ROLE_NAME)
 async def dump_database(interaction: discord.Interaction):
     
@@ -1166,8 +1175,7 @@ async def dump_database(interaction: discord.Interaction):
         )
         return
 
-    database_path = abs_path_of("data\\main.json")
-    if not os.path.exists(database_path):
+    if not os.path.exists(DATABASE_PATH):
         await interaction.response.send_message(
             "Couldn't find database file sorry!",
             ephemeral=True
@@ -1175,7 +1183,7 @@ async def dump_database(interaction: discord.Interaction):
         return
     
     max_file_size_mb = 10
-    file_size_bytes = os.stat(database_path).st_size
+    file_size_bytes = os.stat(DATABASE_PATH).st_size
     file_size_mb = file_size_bytes / 1_000_000
 
     if file_size_mb > max_file_size_mb:
@@ -1185,7 +1193,7 @@ async def dump_database(interaction: discord.Interaction):
         )
         return
 
-    attachment = discord.File(database_path, "main.json")
+    attachment = discord.File(DATABASE_PATH, "main.json")
 
 
     await interaction.response.send_message(
@@ -1194,7 +1202,7 @@ async def dump_database(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@bot.tree.command(name="exit_without_database_save", description="Deactivate the bot without overriding the database file! WARNING DANGEROUS IF MISUSED!")
+@database_commands.command(name="exit_without_save", description="Deactivate the bot without overriding the database file! WARNING DANGEROUS IF MISUSED!")
 @has_role(ADMIN_ROLE_NAME)
 async def exit_without_database_save(interaction: discord.Interaction):
     global save_database_on_exit
@@ -1208,6 +1216,8 @@ async def exit_without_database_save(interaction: discord.Interaction):
         )
         return
 
+    print(f"Nerazawa Bot: {interaction.user.name} is exiting the bot without saving through a command!")
+    
     await interaction.response.send_message(
         content="Exiting without saves to main.json...",
         ephemeral=True
@@ -1221,12 +1231,12 @@ async def exit_without_database_save(interaction: discord.Interaction):
     await bot.close()
 
 
-@bot.tree.command(name="reload_database", description="Reloads the *physical* database file into memory! Override the current database stored in memory.")
+@database_commands.command(name="reload", description="Reloads the *physical* database file into memory! Override the current database stored in memory.")
 @has_role(ADMIN_ROLE_NAME)
 async def reload_database(interaction: discord.Interaction):
     global save_database_on_exit
 
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
     if not verified_user:
@@ -1236,6 +1246,7 @@ async def reload_database(interaction: discord.Interaction):
         )
         return
 
+    print(f"Nerazawa Bot: {interaction.user.name} is force reloading the database through a command!")
     await interaction.followup.send(
         content="Reloading database to main.json file...",
         ephemeral=True
@@ -1250,11 +1261,11 @@ async def reload_database(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@bot.tree.command(name="commit_database", description="Commits database in memory into the physical database file!")
+@database_commands.command(name="commit", description="Commits database in memory into the physical database file!")
 @has_role(ADMIN_ROLE_NAME)
 async def commit_database(interaction: discord.Interaction):
     
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
     if not verified_user:
@@ -1263,20 +1274,27 @@ async def commit_database(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-
+    
+    print(f"Nerazawa Bot: {interaction.user.name} is force committing the database through a command!")
     DATABASE.commit()
 
+    with open(DATABASE_PATH, 'r') as f:
+        file_data = json.load(f)
+        num_of_users_found_in_file = len(file_data["users"])
+    num_of_users_found_in_memory = len(DATABASE.users())
+
     await interaction.followup.send(
-        content=f"Database committed! Found {len(DATABASE.users())} users.",
+        content=f"Database committed! \nFound {num_of_users_found_in_memory} users in memory. \nFound {num_of_users_found_in_file} users in file. \n-# *These should be the same value!!*",
         ephemeral=True
     )
 
 
-@bot.tree.command(name="backup_database", description="Manually cause a backup of the databasess!")
+@database_commands.command(name="force_backup", description="Manually cause a backup of the databasess!")
 @has_role(ADMIN_ROLE_NAME)
-async def backup_database(interaction: discord.Interaction):
+async def force_backup_database(interaction: discord.Interaction):
     
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
+
 
     verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
     if not verified_user:
@@ -1286,14 +1304,35 @@ async def backup_database(interaction: discord.Interaction):
         )
         return
 
+    print(f"Nerazawa Bot: {interaction.user.name} is forcing a backup through a command!")
     DATABASE.backup()
 
     await interaction.followup.send(
-        content=f"Database committed! Found {len(DATABASE.users())} users.",
+        content=f"Database committed as backup! Found {len(DATABASE.users())} users.",
         ephemeral=True
     )
 
-@bot.tree.command(name="restore_from_backup", description="Revert the current database to one of the backups!")
+async def restore_backup_callback(interaction: discord.Interaction, backup_folder_path:str, selected_file_path: str):
+    await interaction.response.defer(ephemeral=True)
+    
+    await interaction.followup.send(
+        f"Restoring backup: `{selected_file_path}`",
+        ephemeral=True
+    )
+
+    full_filepath = abs_path_of(os.path.join(backup_folder_path, selected_file_path))
+
+    print(f"Nerazawa Bot: Restoring from backup: {full_filepath}")
+
+    DATABASE.reload_from_file(full_filepath)
+
+    await interaction.followup.send(
+        f"Restored! \nFound {len(DATABASE.users())} users in backup!",
+        ephemeral=True
+    )
+    
+
+@database_commands.command(name="restore_from_backup", description="Revert the current database to one of the backups!")
 @has_role(ADMIN_ROLE_NAME)
 @app_commands.describe(
     day="The day of the backup you are trying to restore",
@@ -1302,7 +1341,7 @@ async def backup_database(interaction: discord.Interaction):
 )
 async def restore_from_backup(interaction: discord.Interaction, day:int, month:int, year:int):
     
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
     if not verified_user:
@@ -1311,8 +1350,12 @@ async def restore_from_backup(interaction: discord.Interaction, day:int, month:i
             ephemeral=True
         )
         return
+    print(f"Nerazawa Bot: {interaction.user.name} is restoring the database from a backup through a command!")
 
-    backup_folder_path = abs_path_of(f"data/backups/{year}-{month}-{day}/")
+    month_str = f"0{month}" if len(str(month)) == 1 else f"{month}"
+    day_str = f"0{day}" if len(str(day)) == 1 else f"{day}"
+
+    backup_folder_path = abs_path_of(f"data/backups/{year}-{month_str}-{day_str}/")
 
     if not os.path.exists(backup_folder_path):
         await interaction.followup.send(
@@ -1322,21 +1365,27 @@ async def restore_from_backup(interaction: discord.Interaction, day:int, month:i
         return
 
     await interaction.followup.send(
-        content="THIS COMMAND IS NOT COMPLETE!",
+        content=f"Retrieving backups from that day...",
         ephemeral=True
     )
-    return
 
-    # TODO: Add selection of what backup to restore from - hours, minutes, seconds
-    os.listdir(backup_folder_path)[0]#?
+    files = os.listdir(backup_folder_path)
 
-
-    DATABASE.reload_from_file()
+    if len(files) == 0:
+        await interaction.followup.send(
+            content="No backups found in that folder!",
+            ephemeral=True
+        )
+        return
 
     await interaction.followup.send(
-        content=f"Database committed! Found {len(DATABASE.users())} users.",
+        view=FileSelectView(files, backup_folder_path, restore_backup_callback),
         ephemeral=True
     )
+
+bot.tree.add_command(database_commands)
+
+
 
 @bot.tree.command(name="setbirthday", description="Set your birthday so that we can wish you a happy birthday when it happens!")
 @app_commands.describe(
@@ -1381,7 +1430,7 @@ ticket_commands = app_commands.Group(name="ticket", description="Ticket commands
 @app_commands.checks.cooldown(1, 10, key=lambda i: i.user.id) # Stop people spamming tickets
 async def ticket_create(interaction: discord.Interaction, title: str, description: str, attachment: discord.Attachment|None=None):
     #### CHECK THAT ALL THE ARGS ARE PROPERLY FILLED
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     if title.strip() == "": 
         await interaction.followup.send("Please add a relevant title to the ticket!", ephemeral=True)

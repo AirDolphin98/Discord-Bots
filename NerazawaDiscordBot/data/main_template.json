@@ -9,7 +9,8 @@
             ],
             "vc_durations": {
                 "123": { // channel.id
-                    "longest_duration_seconds": 123456.78
+                    "longest_duration_seconds": 123456.78,
+                    "total_time_seconds": 2345432.23
                 }
             },
             "birthday": {
@@ -23,15 +24,6 @@
                     "message":"Stop being so goddamn cool!"
                 }
             ]
-        }
-    },
-    "easter_eggs": {
-        "1": {
-            "type": "command",
-            "command": "/example",
-            "name": "The non-existent command",
-            "description": "Run a command that isn't documented on the bot.",
-            "personalised_description": "Be sneaky and try commands not found on the bot!"
         }
     }
 }

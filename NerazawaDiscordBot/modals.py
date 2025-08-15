@@ -1,4 +1,4 @@
-import discord
+import discord, typing
 from discord.ui import Modal, TextInput, View, Button, DynamicItem
 from discord.ui import UserSelect, ChannelSelect, RoleSelect, MentionableSelect, Select
 from discord.utils import MISSING
@@ -104,3 +104,33 @@ class DeleteTicketConfirmation_View(View):
         
         await interaction.response.send_message("Deleting channel")
         await self.on_click_callback(interaction)
+
+
+class FileSelect(Select):
+    def __init__(self, files, backup_folder_path, async_callback):
+        # Build the options for the dropdown
+        options = [
+            discord.SelectOption(label=file, value=file)
+            for file in files
+        ]
+        super().__init__(
+            placeholder="Select a backup to restore",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+        self.backup_folder_path = backup_folder_path
+        self.async_callback = async_callback
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_file = self.values[0]
+        
+        if self.async_callback is not None and callable(self.async_callback):
+            await self.async_callback(interaction, self.backup_folder_path, selected_file) # type: ignore
+        
+
+class FileSelectView(View):
+    def __init__(self, files, backup_folder_path, async_callback):
+        super().__init__()
+        self.add_item(FileSelect(files, backup_folder_path, async_callback))

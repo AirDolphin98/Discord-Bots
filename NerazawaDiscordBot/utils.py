@@ -11,31 +11,40 @@ def abs_path_of(filename: str):
 
 class JSONDatabase:
     _instance = None
-    file_path: str = "./data/main.json"
-    data = {}
+    main_file_path: str = "./data/main.json"
+    data: dict = {}
+    easter_eggs_db: dict = {}
 
-    def __new__(cls, file_path: str):
-        """Loads JSON database"""
-        if cls._instance is None:
-            cls._instance = super(JSONDatabase, cls).__new__(cls)
-        cls._instance._load(file_path)
-        return cls._instance
-
+    def __init__(self, file_path: str, easter_eggs_path: str):
+        self.main_file_path = file_path
+        self._load(file_path)
+        self.easter_eggs_db = self.load_json(easter_eggs_path)
+        
     def _load(self, file_path):
+        """
+        Loads main.json ONLY
+        """
         print(f"Loading database from: {file_path}")
-        with open(abs_path_of(file_path), 'r') as f:
+        with open(file_path, 'r') as f:
             self.data: dict = json.load(f)
-            self.file_path = file_path
         print(f"Database loaded successfully. Users count: {len(self.data.get('users', {}))}")
 
+    def load_json(self, file_path):
+        """
+        Loads any json file, and returns it.
+        """
+        with open(abs_path_of(file_path), 'r') as f:
+            data: dict = json.load(f)
+        return data
+
     def reload_from_file(self, filepath:str|None=None):
-        if self.file_path or filepath:
+        if self.main_file_path or filepath:
             if filepath is not None:
                 print("Reloading database from given file path (most likely a backup)...")
                 self._load(filepath)
             else:
                 print(f"Reloading database from starting file...")
-                self._load(self.file_path)
+                self._load(self.main_file_path)
         else:
             print("No file path set for database reload!")
 
@@ -177,7 +186,7 @@ class JSONDatabase:
         return clean_data
 
     def easter_eggs(self) -> dict:
-        return self.data["easter_eggs"]
+        return self.easter_eggs_db
 
     def _easter_egg_as_dict(self, egg_id:int|str) -> dict|None:
         return self.easter_eggs().get(str(egg_id), None)
@@ -343,7 +352,7 @@ class JSONDatabase:
             pprint.pprint(self.data)
 
     def backup(self):
-        if self.file_path is None:
+        if self.main_file_path is None:
             print("[WARN] No file path has been set for database! This could lead to missing data as it cannot be committed to the file!")
             return
         
@@ -352,7 +361,7 @@ class JSONDatabase:
         timestamp = now.strftime("%Y-%m-%d_%H-%M-%S") # Must be filepath friendly
 
         # Find folder and filename
-        head, tail = os.path.split(self.file_path)
+        head, tail = os.path.split(self.main_file_path)
         tail_no_ext = os.path.splitext(tail)[0]
 
         # Backup Folder - ...\backups\YEAR-MONTH-DAY\
@@ -386,19 +395,18 @@ class JSONDatabase:
         If `filepath` is None it will use the default path given to it at the start.
         Usually will only provide the `filepath` argument when creating backups.
         """
-        if self.file_path is None and filepath is None:
+        if self.main_file_path is None and filepath is None:
             print("[WARN] No file path has been set for database! This could lead to missing data as it cannot be committed to the file!")
             return
         
 
-        target_path = filepath if filepath else self.file_path
+        target_path = filepath if filepath else self.main_file_path
         target_path = abs_path_of(target_path)
 
         head, _ = os.path.split(target_path)
         if not os.path.exists(head): 
             os.makedirs(head, exist_ok=True)
 
-        print("Nerasawa Bot: Committing here:", target_path)
         with open(abs_path_of(target_path), "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=4)
 
@@ -408,15 +416,16 @@ class EasterEgg():
     def __init__(self, egg_id: int|str, db: JSONDatabase) -> None:
         self.id = egg_id
         self.db = db
-        egg_data = self.db._easter_egg_as_dict(egg_id)
-        if egg_data is None:
+
+        self.egg_data = self.db.easter_eggs()[str(egg_id)]
+
+        if self.egg_data is None:
             raise KeyError(f"Given egg_id of `{egg_id}` does not exist!")
-        self.type = egg_data["type"]
-        self.__load_for_type(egg_data)
-        self.title_ = egg_data["title"]
-        self.description_ = egg_data["description"]
-        self.personalised_description = egg_data["personalised_description"]
-        del egg_data
+        self.type = self.egg_data["type"]
+        self.__load_for_type(self.egg_data)
+        self.title_ = self.egg_data["title"]
+        self.description_ = self.egg_data["description"]
+        self.personalised_description = self.egg_data["personalised_description"]
 
 
     def __load_for_type(self, egg_data: dict):
@@ -454,6 +463,9 @@ class EasterEgg():
 
     def unlock(self, user_id):
         self.db.unlock_easter_egg(user_id, self.id, datetime.now().timestamp())
+
+    def get_data(self):
+        return self.egg_data
 
 class VCStatType(Enum):
     top = "top"
@@ -529,7 +541,7 @@ def is_ticket_channel(channel: discord.TextChannel|None|AllChannelTypes):
 
 
 if __name__ == "__main__":
-    db = JSONDatabase("data/main.json")
+    db = JSONDatabase("data/main.json", "data/static/easter_eggs.json")
     db.prettifier()
     egg = db.easter_egg(1)
     print(egg.is_unlocked(123))
