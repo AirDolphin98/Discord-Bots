@@ -194,6 +194,18 @@ async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Memb
 
     await bday_channel.send(file=image, embed=embed)
 
+    try:
+        await bday_channel.send(file=image, embed=embed)
+    except discord.Forbidden:
+        log(f"❌ Forbidden: Missing permissions in {bday_channel.guild.name}#{bday_channel.name}")
+    except discord.HTTPException as e:
+        log(f"❌ HTTPException: {e}")
+
+    perms = bday_channel.permissions_for(bday_channel.guild.me)
+    log(f"Bot perms in {bday_channel.guild.name}#{bday_channel.name}: {perms}")
+
+
+
     if overide_with_username: # Should be temp file
         os.remove(path)
 
@@ -1925,9 +1937,14 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     else:
         log(f"[red bold]A error of type `{type(error)}` occurred![/red bold] Error: {error} | Traceback:\n{error_traceback}")
         censored_error = str(error).replace(TOKEN, "REDACTED") # In case the error for some reason includes the token 💀
-        await interaction.response.send_message(
-            f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
-        )
+        try:
+            await interaction.response.send_message(
+                f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
+            )
+        except discord.errors.InteractionResponded:
+            await interaction.followup.send(
+                f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
+            )
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
