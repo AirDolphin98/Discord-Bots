@@ -17,7 +17,7 @@ from pprint import pprint
 
 with open(abs_path_of("auth.json")) as auth, \
         open(abs_path_of("config.json")) as config, \
-            open(abs_path_of("data\\birthday_channels.json")) as birthdays:
+            open(abs_path_of("data/birthday_channels.json")) as birthdays:
     
     AUTH_CONFIG = json.load(auth)
     TOKEN: str = AUTH_CONFIG["bot_token"]
@@ -1226,6 +1226,45 @@ async def dump_database(interaction: discord.Interaction):
         ephemeral=True
     )
 
+@database_commands.command(name="dump_birthday", description="Dumps the birthday_channels.json file! Authorised users only >:L")
+@has_role(ADMIN_ROLE_NAME)
+async def dump_birthday_channels_database(interaction: discord.Interaction):
+    
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    
+    if not verified_user:
+        await interaction.response.send_message(
+            "Sorry but only specific users can use this command!",
+            ephemeral=True
+        )
+        return
+
+    if not os.path.exists(DATABASE_PATH):
+        await interaction.response.send_message(
+            "Couldn't find the file sorry!",
+            ephemeral=True
+        )
+        return
+    
+    max_file_size_mb = 10
+    file_size_bytes = os.stat(DATABASE_PATH).st_size
+    file_size_mb = file_size_bytes / 1_000_000
+
+    if file_size_mb > max_file_size_mb:
+        await interaction.response.send_message(
+            f"The file is far to big to send over discord! Number of MegaBytes over: {file_size_mb - max_file_size_mb}",
+            ephemeral=True
+        )
+        return
+
+    attachment = discord.File("data/birthday_channels.json", "birthday_channels.json")
+
+    await interaction.response.send_message(
+        content="Here's the birthdays_channels.json file!",
+        file=attachment,
+        ephemeral=True
+    )
+
 @database_commands.command(name="exit_without_save", description="Deactivate the bot without overriding the database file! WARNING DANGEROUS IF MISUSED!")
 @has_role(ADMIN_ROLE_NAME)
 async def exit_without_database_save(interaction: discord.Interaction):
@@ -1407,6 +1446,86 @@ async def restore_from_backup(interaction: discord.Interaction, day:int, month:i
         ephemeral=True
     )
 
+async def dump_backup_callback(interaction: discord.Interaction, backup_folder_path:str, selected_file_path: str):
+    await interaction.response.defer(ephemeral=True)
+    
+    await interaction.followup.send(
+        f"Dumping backup: `{selected_file_path}`",
+        ephemeral=True
+    )
+
+    full_filepath = abs_path_of(os.path.join(backup_folder_path, selected_file_path))
+
+    max_file_size_mb = 10
+    file_size_bytes = os.stat(full_filepath).st_size
+    file_size_mb = file_size_bytes / 1_000_000
+
+    if file_size_mb > max_file_size_mb:
+        await interaction.followup.send(
+            f"The database is far to big to send over discord! Number of MegaBytes over: {file_size_mb - max_file_size_mb}",
+            ephemeral=True
+        )
+        return
+
+    attachment = discord.File(DATABASE_PATH, "main.json")
+
+    await interaction.followup.send(
+        content="Here's the database!",
+        file=attachment,
+        ephemeral=True
+    )
+
+
+@database_commands.command(name="dump_specific_backup", description="Dump the contents of a specified database! (Authorised Users Only!)")
+@has_role(ADMIN_ROLE_NAME)
+@app_commands.describe(
+    day="The day of the backup you are trying to retrieve",
+    month="The month of the backup you are trying to retrieve",
+    year="The year of the backup you are trying to retrieve"
+)
+async def dump_specific_backup(interaction: discord.Interaction, day:int, month:int, year:int):
+    
+    await interaction.response.defer(ephemeral=True)
+
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    if not verified_user:
+        await interaction.followup.send(
+            content="Sorry but only specific users can use this command!",
+            ephemeral=True
+        )
+        return
+
+    month_str = f"0{month}" if len(str(month)) == 1 else f"{month}"
+    day_str = f"0{day}" if len(str(day)) == 1 else f"{day}"
+
+    backup_folder_path = abs_path_of(f"data/backups/{year}-{month_str}-{day_str}/")
+
+    if not os.path.exists(backup_folder_path):
+        await interaction.followup.send(
+            content="Sorry but that date given does not have any backups!",
+            ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        content=f"Retrieving backups from that day...",
+        ephemeral=True
+    )
+
+    files = os.listdir(backup_folder_path)
+
+    if len(files) == 0:
+        await interaction.followup.send(
+            content="No backups found in that folder!",
+            ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        view=FileSelectView(files, backup_folder_path, dump_backup_callback),
+        ephemeral=True
+    )
+
 bot.tree.add_command(database_commands)
 
 
@@ -1475,7 +1594,7 @@ async def set_birthday_channel(interaction: discord.Interaction, channel: discor
     guild_id = channel.guild.id
     channel_id = channel.id
     birthday_channel_ids[str(guild_id)] = channel_id
-    with open(abs_path_of("data\\birthday_channels.json"), "w") as f:
+    with open(abs_path_of("data/birthday_channels.json"), "w") as f:
         json.dump(birthday_channel_ids, f, indent=4)
     await interaction.response.send_message(f"Birthday channel has been set to {channel.mention}!", ephemeral=True)
 
