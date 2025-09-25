@@ -1,5 +1,6 @@
 from __future__ import annotations # Allows type hinting classes that haven't been setup yet - Requires Python 3.7+
 import json, os, pprint, discord, typing
+from rich import print
 from enum import Enum
 from datetime import datetime
 import datetime as dt
@@ -7,6 +8,9 @@ import datetime as dt
 def abs_path_of(filename: str):
     """Assumes filename is a file/folder in the same directory as this"""
     return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), filename.removeprefix("./")))
+
+def log(*values):
+    print(f"[bold]Nerazawa Bot:[/bold]", *values)
 
 
 class JSONDatabase:
@@ -24,10 +28,10 @@ class JSONDatabase:
         """
         Loads main.json ONLY
         """
-        print(f"Loading database from: {file_path}")
+        log(f"Loading database from: {file_path}")
         with open(file_path, 'r') as f:
             self.data: dict = json.load(f)
-        print(f"Database loaded successfully. Users count: {len(self.data.get('users', {}))}")
+        log(f"Database loaded successfully. Users count: {len(self.data.get('users', {}))}")
 
     def load_json(self, file_path):
         """
@@ -40,13 +44,13 @@ class JSONDatabase:
     def reload_from_file(self, filepath:str|None=None):
         if self.main_file_path or filepath:
             if filepath is not None:
-                print("Reloading database from given file path (most likely a backup)...")
+                log("Reloading database from given file path (most likely a backup)...")
                 self._load(filepath)
             else:
-                print(f"Reloading database from starting file...")
+                log(f"Reloading database from starting file...")
                 self._load(self.main_file_path)
         else:
-            print("No file path set for database reload!")
+            log("No file path set for database reload!")
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -64,7 +68,7 @@ class JSONDatabase:
         try:
             return self.users()[str(user_id)]
         except KeyError:
-            # print(f"[WARNING] Given user by the id `{user_id}` does not exist!")
+            # log(f"[WARNING] Given user by the id `{user_id}` does not exist!")
             return self.create_user(user_id)
 
     def create_user(self, user_id: int|str) -> dict:
@@ -99,12 +103,12 @@ class JSONDatabase:
             
             # UNLOCKED EASTER EGGS
             if "unlocked_easter_eggs" not in user.keys():
-                print("Added missing `unlocked_easter_eggs` key!")
+                log("Added missing `unlocked_easter_eggs` key!")
                 user["unlocked_easter_eggs"] = []
             
             # VC DURATIONS - Fix duplicates first
             if "vc_durations" not in user.keys():
-                print("Added missing `vc_durations` key!")
+                log("Added missing `vc_durations` key!")
                 user["vc_durations"] = {}
             else:
                 # Fix duplicate channel IDs by merging data
@@ -117,14 +121,14 @@ class JSONDatabase:
                 has_total_duration_value = "total_time_seconds" in data.keys()
                 
                 if not has_longest_duration_value:
-                    print(f"Added missing `longest_duration_seconds` in `vc_durations` for user {u_id}")
+                    log(f"Added missing `longest_duration_seconds` in `vc_durations` for user {u_id}")
                     if has_total_duration_value:
                         data["longest_duration_seconds"] = data["total_time_seconds"]
                     else:
                         data["longest_duration_seconds"] = 0
 
                 if not has_total_duration_value:
-                    print(f"Added missing `total_time_seconds` in `vc_durations` for user {u_id}")
+                    log(f"Added missing `total_time_seconds` in `vc_durations` for user {u_id}")
                     if has_longest_duration_value:
                         data["total_time_seconds"] = data["longest_duration_seconds"]
                     else:
@@ -133,24 +137,24 @@ class JSONDatabase:
                 if has_longest_duration_value and has_total_duration_value:
                     # Fix if total time is less than the longest recorded time
                     if data["total_time_seconds"] < data["longest_duration_seconds"]:
-                        print(f"Fixed `total_time_seconds` being less than `longest_duration_seconds` for user {u_id}")
+                        log(f"Fixed `total_time_seconds` being less than `longest_duration_seconds` for user {u_id}")
                         data["total_time_seconds"] = data["longest_duration_seconds"]
 
             # BIRTHDAY
             if "birthday" not in user.keys():
-                print("Added missing `birthday` key!")
+                log("Added missing `birthday` key!")
                 user["birthday"] = {"day": None, "month": None, "timezone": None}
 
             # WARNINGS
             if "warnings" not in user.keys():
-                print("Added missing `warnings` key!")
+                log("Added missing `warnings` key!")
                 user["warnings"] = []
 
             # Set user with fixed data
             self.set_user(u_id, user)
 
         if "easter_eggs" in list(self.data.keys()):
-            print("Easter eggs are now stored in a seperate file so removing from main.json!")
+            log("Easter eggs are now stored in a seperate file so removing from main.json!")
             self.data.pop("easter_eggs")
 
     def _validate_vc_data(self, vc_durations: dict) -> dict:
@@ -340,7 +344,7 @@ class JSONDatabase:
                     top_channel_id = c_id
 
         except KeyError as e: # Shouldn't happen if `verify_users_database` was run at the start of the script!
-            print(f"[WARN] Error while finding *top* vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
+            log(f"[WARN] Error while finding *top* vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
 
         return {
             "found": top_duration != -1 and top_channel_id != -1,
@@ -359,7 +363,7 @@ class JSONDatabase:
                 total_duration += channel_total_duration
 
         except KeyError as e: # Shouldn't happen if `verify_users_database` was run at the start of the script!
-            print(f"[WARN] Error while finding *total* vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
+            log(f"[WARN] Error while finding *total* vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
 
         return {
             "found": total_duration != -1,
@@ -376,7 +380,7 @@ class JSONDatabase:
 
     def backup(self):
         if self.main_file_path is None:
-            print("[WARN] No file path has been set for database! This could lead to missing data as it cannot be committed to the file!")
+            log("[WARN] No file path has been set for database! This could lead to missing data as it cannot be committed to the file!")
             return
         
         now = datetime.now(dt.timezone.utc)
@@ -419,7 +423,7 @@ class JSONDatabase:
         Usually will only provide the `filepath` argument when creating backups.
         """
         if self.main_file_path is None and filepath is None:
-            print("[WARN] No file path has been set for database! This could lead to missing data as it cannot be committed to the file!")
+            log("[WARN] No file path has been set for database! This could lead to missing data as it cannot be committed to the file!")
             return
         
 
@@ -541,9 +545,9 @@ async def find_category(name, guild: discord.Guild) -> discord.CategoryChannel:
     )
     # Create category if missing
     if tickets_category is None:
-        print("Nerazawa Bot: Creating missing tickets category...")
+        log("Creating missing tickets category...")
         tickets_category = await guild.create_category(name=name)
-        print("Nerazawa Bot: Created missing tickets category!")
+        log("Created missing tickets category!")
     
     return tickets_category
 
@@ -567,4 +571,4 @@ if __name__ == "__main__":
     db = JSONDatabase("data/main.json", "data/static/easter_eggs.json")
     db.prettifier()
     egg = db.easter_egg(1)
-    print(egg.is_unlocked(123))
+    log(egg.is_unlocked(123))

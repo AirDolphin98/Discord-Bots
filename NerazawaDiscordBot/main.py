@@ -11,13 +11,13 @@ from jisho_api.word.request import WordRequest
 from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
-from utils import JSONDatabase, abs_path_of, VCStatType, find_role, has_role, command_error, find_category, is_ticket_channel
+from utils import JSONDatabase, abs_path_of, VCStatType, find_role, has_role, command_error, find_category, is_ticket_channel, log
 from modals import FileSelectView
 from pprint import pprint
 
-
 with open(abs_path_of("auth.json")) as auth, \
-        open(abs_path_of("config.json")) as config:
+        open(abs_path_of("config.json")) as config, \
+            open(abs_path_of("data\\birthday_channels.json")) as birthdays:
     
     AUTH_CONFIG = json.load(auth)
     TOKEN: str = AUTH_CONFIG["bot_token"]
@@ -28,13 +28,13 @@ with open(abs_path_of("auth.json")) as auth, \
     ADMIN_ROLE_NAME: str = CONFIG["staff_role"]
     DATABASE_PATH: str = abs_path_of(CONFIG["database_path"])
     DATABASE_BACKUP_DELAY_HOURS: int = CONFIG["backups_config"]["delay_hours"]
-    BIRTHDAY_CHANNEL_ID: int = CONFIG["happy_birthday_channel_id"]
     TICKETS_CATEGORY_NAME: str = CONFIG["tickets_category_name"]
     ARCHIVED_TICKETS_CATEGORY_NAME: str = CONFIG["archived_tickets_category_name"]
     
     EASTER_EGGS_DATABASE_PATH = abs_path_of(CONFIG["easter_eggs_database_path"])
-    
     del CONFIG
+
+    birthday_channel_ids = json.load(birthdays)
 
 DATABASE = JSONDatabase(DATABASE_PATH, EASTER_EGGS_DATABASE_PATH)
 
@@ -102,7 +102,7 @@ atexit.register(on_exit)
 
 async def backup_task():
     now = datetime.now(dt.timezone.utc)
-    print(f"Nerazawa Bot: Creating backup! - {now}")
+    log(f"Creating backup! - {now}")
     update_vc_times(remove_from_dict=False) # Bot still online so we can let there times continue - so don't remove
     DATABASE.backup()
     DATABASE.commit()
@@ -197,8 +197,30 @@ async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Memb
     if overide_with_username: # Should be temp file
         os.remove(path)
 
+async def send_birthday_message_in_all_guilds(user: discord.User | discord.Member, mutual_guilds:None|list[discord.Guild]=None):
+    # Set the default mutual guilds to the guilds the user object shares with the bot
+    if mutual_guilds is None:
+        mutual_guilds = user.mutual_guilds
+    
+    # Loop through each guild and try and send a happy birthday in the specific channel!
+    for mg in mutual_guilds:
+        guild_id = str(mg.id)
+        if guild_id not in birthday_channel_ids:
+            log(f"{mg.name} ({mg.id}) has not setup their birthday channel using the `/set_birthday_channel` command!")
+            continue
+        birthday_channel_id = birthday_channel_ids[guild_id]
+        birthday_channel = mg.get_channel(birthday_channel_id)
+        if birthday_channel is None:
+            log(f"{mg.name} ({mg.id}) has a invalid birthday channel! Make sure the channel exists!")
+            continue
+        elif isinstance(birthday_channel, discord.TextChannel) == False:
+            log(f"{mg.name} ({mg.id}) has a invalid birthday channel! Make sure the channel is a text channel!")
+            continue
+        log(f"Wishing {user.name} a happy birthday in [italic]{mg.name}#{birthday_channel.name}[/italic]")
+        await happy_birthday(birthday_channel, user) # type: ignore
+
 async def check_bdays():
-#    print("CHECKING BIRTHDAYS!")
+    # log("CHECKING BIRTHDAYS!")
     for user_id in DATABASE.users():
         exists, bday = DATABASE.get_birthday(user_id)
         
@@ -213,19 +235,19 @@ async def check_bdays():
         current_happy_bday_time = today.hour == 9 and (0 <= today.minute <= 10)
 
         if today.day == d and today.month == m and current_happy_bday_time:
-            user = await bot.fetch_user(user_id)
-            channel = await bot.fetch_channel(BIRTHDAY_CHANNEL_ID)
-            if isinstance(channel, discord.TextChannel):
-                await happy_birthday(channel, user)
-            else:
-                print("Given birthday channel must be a Text Channel!!!")
+            user = bot.get_user(user_id)
+            if user is None:
+                log(f"[red italic]One of the users in the database are no longer valid for birthdays(?) (User ID: {user_id}) [/red italic]")
+                continue
+
+            await send_birthday_message_in_all_guilds(user)
 
 async def add_missing_vc_people():
     all_members = bot.get_all_members() # Gets in all guilds as well - but shouldn't matter as it should only be in one server
     timestamp = datetime.now(dt.timezone.utc)
     for member in all_members:
         if isinstance(member.voice, discord.VoiceState) and isinstance(member.voice.channel, discord.VoiceChannel):
-            print("Added missing member in VC:", member.name)
+            log("Added missing member in VC:", member.name)
             member_vc_times[member.id] = {
                 "start_time": timestamp,
                 "channel_id": member.voice.channel.id
@@ -312,7 +334,7 @@ async def cleanup(interaction: discord.Interaction, amount: int):
     except Exception as e:
         await command_error(f"Unexpected error: {e}", interaction=interaction, followup=True)
 
-target = datetime(2026, 12, 23, 12, 34, 20, 0)
+target = datetime(2026, 12, 23, 12, 34, 20, 0, tzinfo=dt.timezone.utc)
 @bot.tree.command(name="countdown", description="How much time is left until the countdown finishes..")
 async def countdown(interaction: discord.Interaction):
     right_now = datetime.now(dt.timezone.utc)
@@ -984,6 +1006,7 @@ commands_and_meanings = {
     "/wheretfami": "Find out what happens in the channel you sent the command in!",
     "/credits": "Find out who programmed, inspired & helped to create me~",
     "/countdown": "Oh god what is this counting down to..",
+    "/set_birthday `day` `month` `timezone` `silent`": "Set's your birthday so it can be celebrated later! *Use silent if you are concerned about leaking your timezone!*",
     "/ping": "Am I online and working? I sure do hope so.",
     "/todaysbunny": "Find out what the lastest bunny is on dailybunny.org!",
     "/vcleaderboard `leaderboard`": "Who's been spending the most time in a VC or in total! Find out and compete for top spot!",
@@ -996,8 +1019,9 @@ commands_and_meanings = {
     "/embedui `include_images` `include_fields`": "A modern approach to make embeds quicker than using code or webhooks! ***(Moderator Command)***",
     "/embed `title` `description` `color` `image` `thumbnail` `field 1/2/... name/value/inline`": "Make embeds quick using no commands. But also try `/embedui` if you want a more improved approach! ***(Moderator Command)***",
     "/userinfo `member`": "Don't worry boss I'm ready to collect the intel! ***(Moderator Command)***",
+    "/set_birthday_channel `channel`": "Set where the birthday embeds will appear for users! ***(Moderator Command)***",
     "/warn `member` `reason`": "Warns the given discord member so they don't make the same mistake again! ***(Moderator Command)***",
-    "|| /dump_database ||": "|| ***(Authorised Users Command) *** ||"
+    "|| /database `sub_command` ||": "|| ***(Authorised Users Command) *** ||"
 }
 
 @bot.tree.command(name="help", description="I bet your a little confused on how I work aren't you!")
@@ -1216,7 +1240,7 @@ async def exit_without_database_save(interaction: discord.Interaction):
         )
         return
 
-    print(f"Nerazawa Bot: {interaction.user.name} is exiting the bot without saving through a command!")
+    log(f"{interaction.user.name} is exiting the bot without saving through a command!")
     
     await interaction.response.send_message(
         content="Exiting without saves to main.json...",
@@ -1225,7 +1249,7 @@ async def exit_without_database_save(interaction: discord.Interaction):
     save_database_on_exit = False
     member_vc_times.clear() # Avoid any chance of data overriding the physical database file.
     
-    print("Nerazawa Bot: Shutting down backup scheduler as the bot is exiting without saving!")
+    log("Shutting down backup scheduler as the bot is exiting without saving!")
     scheduler.shutdown(wait=False)  # Stop scheduled backups if used
 
     await bot.close()
@@ -1246,7 +1270,7 @@ async def reload_database(interaction: discord.Interaction):
         )
         return
 
-    print(f"Nerazawa Bot: {interaction.user.name} is force reloading the database through a command!")
+    log(f"{interaction.user.name} is force reloading the database through a command!")
     await interaction.followup.send(
         content="Reloading database to main.json file...",
         ephemeral=True
@@ -1275,7 +1299,7 @@ async def commit_database(interaction: discord.Interaction):
         )
         return
     
-    print(f"Nerazawa Bot: {interaction.user.name} is force committing the database through a command!")
+    log(f"{interaction.user.name} is force committing the database through a command!")
     DATABASE.commit()
 
     with open(DATABASE_PATH, 'r') as f:
@@ -1304,7 +1328,7 @@ async def force_backup_database(interaction: discord.Interaction):
         )
         return
 
-    print(f"Nerazawa Bot: {interaction.user.name} is forcing a backup through a command!")
+    log(f"{interaction.user.name} is forcing a backup through a command!")
     DATABASE.backup()
 
     await interaction.followup.send(
@@ -1322,7 +1346,7 @@ async def restore_backup_callback(interaction: discord.Interaction, backup_folde
 
     full_filepath = abs_path_of(os.path.join(backup_folder_path, selected_file_path))
 
-    print(f"Nerazawa Bot: Restoring from backup: {full_filepath}")
+    log(f"Restoring from backup: {full_filepath}")
 
     DATABASE.reload_from_file(full_filepath)
 
@@ -1350,7 +1374,7 @@ async def restore_from_backup(interaction: discord.Interaction, day:int, month:i
             ephemeral=True
         )
         return
-    print(f"Nerazawa Bot: {interaction.user.name} is restoring the database from a backup through a command!")
+    log(f"{interaction.user.name} is restoring the database from a backup through a command!")
 
     month_str = f"0{month}" if len(str(month)) == 1 else f"{month}"
     day_str = f"0{day}" if len(str(day)) == 1 else f"{day}"
@@ -1391,23 +1415,26 @@ bot.tree.add_command(database_commands)
 @app_commands.describe(
     day="The day you were born!", 
     month="The month you came into existence! \nA number between 1-12.",
-    timezone="Your timezone! E.g. `Asia/Tokyo`!"
+    timezone="Your timezone! E.g. `Asia/Tokyo`!",
+    silent="If your concerned about leaking your timezone use this! It will whisper the message."
 )
-async def set_birthday(interaction: discord.Interaction, day: int, month: int, timezone: str):
+async def set_birthday(interaction: discord.Interaction, day: int, month: int, timezone: str, silent: bool=False):
+    await interaction.response.defer(ephemeral=silent)
     try:
         datetime(year=2000, month=month, day=day)  # 2000 is a leap year so we can test more safely compared to other years with less days in Feb etc
     except ValueError:
-        await interaction.response.send_message("I ain't no dumby — that's not a real date ಠ_ಠ")
+        # NOTE: Now that I think about it this basically means no one born on a leap year can set their birthday..
+        await interaction.followup.send("I ain't no dumby - that's not a real date ಠ_ಠ\n-# Unless your birthday is on a leap year which then I'm sorry T-T", ephemeral=silent)
         return
     if timezone not in pytz.all_timezones:
-        await interaction.response.send_message(content="Sorry but I can't find that timezone!\nEnter something like `Asia/Tokyo`. If your confused here's a [list of all the timezones](<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>)")
+        await interaction.followup.send("Sorry but I can't find that timezone!\nEnter something like `Asia/Tokyo`. If your confused here's a [list of all the timezones](<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>)", ephemeral=silent)
         return
     
     if day == 24 and month == 9:
         await found_easter_egg(interaction.user, easter_egg_id=12)
     elif day == 1 and month == 4:
         await found_easter_egg(interaction.user, easter_egg_id=13)
-        await interaction.response.send_message("Your kidding right? ( ͡° ͜ʖ ͡°)")
+        await interaction.followup.send("Your kidding right? ( ͡° ͜ʖ ͡°)", ephemeral=silent)
         return
     elif day == 11 and month == 7:
         await found_easter_egg(interaction.user, easter_egg_id=17)
@@ -1415,9 +1442,42 @@ async def set_birthday(interaction: discord.Interaction, day: int, month: int, t
     DATABASE.set_birthday(interaction.user.id, day, month, timezone)
     DATABASE.commit()
 
-    await interaction.response.send_message(content="Can't wait to have fun on your birthday (˶˃ᵕ˂˶)!")
+    today = datetime.now(pytz.timezone(timezone))
 
+    # Check if it is AFTER the birthday celebration time of 9:00AM-9:10AM (so that we don't accidentally celebrate it twice!)
+    current_happy_bday_time = today.hour == 9 and (0 <= today.minute <= 10)
+    after_happy_bday_time = (today.hour > 9) or (today.hour == 9 and today.minute > 10)
 
+    if today.day == day and today.month == month:
+        if current_happy_bday_time:
+            await interaction.followup.send("Can't wait to have fun... WAIT ITS YOUR BIRTHDAY TODAY? Happy birthday!! (づ> v <)づ♡", ephemeral=silent)
+            await send_birthday_message_in_all_guilds(interaction.user)
+        
+        elif after_happy_bday_time:
+            await interaction.followup.send("Can't wait to have fun... WAIT ITS YOUR BIRTHDAY TODAY? Happy birthday!! (づ> v <)づ♡ \n-# Sorry that we missed your embed sending one through now!", ephemeral=silent)
+            await send_birthday_message_in_all_guilds(interaction.user)
+
+        else: # Before happy birthday time
+            await interaction.followup.send("Can't wait to have fun... WAIT ITS YOUR BIRTHDAY TODAY? Happy birthday!! (づ> v <)づ♡ \n-# Later today you'll get a happy bday embed dedicated to you!", ephemeral=silent)
+            await send_birthday_message_in_all_guilds(interaction.user)
+
+    else:
+        # Not currently the same date as their birthday
+        await interaction.followup.send(content="Can't wait to have fun on your birthday (˶˃ᵕ˂˶)!", ephemeral=silent)
+
+# TODO: ADD SOME SORT OF EASTER EGG!
+@bot.tree.command(name="set_birthday_channel", description="Set which channel the birthday messages will appear!")
+@has_role(ADMIN_ROLE_NAME)
+@app_commands.describe(
+    channel="The birthday channel!"
+)
+async def set_birthday_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    guild_id = channel.guild.id
+    channel_id = channel.id
+    birthday_channel_ids[str(guild_id)] = channel_id
+    with open(abs_path_of("data\\birthday_channels.json"), "w") as f:
+        json.dump(birthday_channel_ids, f, indent=4)
+    await interaction.response.send_message(f"Birthday channel has been set to {channel.mention}!", ephemeral=True)
 
 ticket_commands = app_commands.Group(name="ticket", description="Ticket commands")
 
@@ -1744,7 +1804,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
                        ephemeral=True)
 
     else:
-        print(f"A error of type `{type(error)}` occurred! Error: {error} | Traceback:\n{error_traceback}")
+        log(f"[red bold]A error of type `{type(error)}` occurred![/red bold] Error: {error} | Traceback:\n{error_traceback}")
         censored_error = str(error).replace(TOKEN, "REDACTED") # In case the error for some reason includes the token 💀
         await interaction.response.send_message(
             f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
@@ -1774,7 +1834,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     we_have_there_start_time = member.id in member_vc_times.keys() 
 
     if entered_vc and isinstance(after.channel, discord.VoiceChannel):
-        # print(f"{member.name} entered VC at {timestamp}")
+        # log(f"{member.name} entered VC at {timestamp}")
         member_vc_times[member.id] = {
             "start_time": timestamp,
             "channel_id": after.channel.id
@@ -1783,13 +1843,13 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         out = update_vc_times(specific_member_id=member.id, remove_from_dict=True)
         
         if out == None: 
-            print(f"VC exit time for {member.name} was None even though this should never happen!?")
+            log(f"[purple italic]VC exit time for {member.name} was None even though this should never happen!?[/purple italic]")
             return # Should never happen - this is purely for type hinting
         difference, seconds_in_vc = out
 
         DATABASE.commit()
 
-        # print(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
+        # log(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
 
 @bot.event
 async def on_ready():
@@ -1799,13 +1859,13 @@ async def on_ready():
 
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="the screams of the damned"))
 
-    print(f"[GREEN]Logged in as {bot.user}")
+    log(f"[green bold]Logged in as {bot.user}[/green bold]")
     
     scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
     scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
     scheduler.start()
 
-    print("Scheduler setup!")
+    log("Scheduler setup!")
 
     await check_bdays()
     await add_missing_vc_people()
