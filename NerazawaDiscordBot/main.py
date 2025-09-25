@@ -192,8 +192,6 @@ async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Memb
 
     # embed.add_field(name="Message", value=message)
 
-    await bday_channel.send(file=image, embed=embed)
-
     try:
         await bday_channel.send(file=image, embed=embed)
     except discord.Forbidden:
