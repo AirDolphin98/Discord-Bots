@@ -1277,7 +1277,7 @@ async def easter_egg_leaderboard(interaction: discord.Interaction):
             # If alpha than cross out all the values
             alpha_exists = True
             top_10_names += f"~~*{i}: {user.mention}*~~\n"
-            top_10_scores += f"~~*{make_score_emojis(unlocked_amt, total_eggs, unlocked_emoji=":x:", locked_emoji=":x:")}*~~\n"
+            top_10_scores += f"~~*{make_score_emojis(unlocked_amt, total_eggs, unlocked_emoji=':x:', locked_emoji=':x:')}*~~\n"
         else:
             top_10_names += f"{i}: {user.mention}\n"
             top_10_scores += f"{make_score_emojis(unlocked_amt, total_eggs)}\n"
