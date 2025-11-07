@@ -11,9 +11,8 @@ from jisho_api.word.request import WordRequest
 from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
-from utils import JSONDatabase, abs_path_of, VCStatType, find_role, has_role, command_error, find_category, is_ticket_channel, log
+from utils import JSONDatabase, GameNight, abs_path_of, retrieve_user, VCStatType, find_role, has_role, command_error, find_category, is_ticket_channel, log
 from modals import FileSelectView
-from pprint import pprint
 
 with open(abs_path_of("auth.json")) as auth, \
         open(abs_path_of("config.json")) as config, \
@@ -40,12 +39,13 @@ DATABASE = JSONDatabase(DATABASE_PATH, EASTER_EGGS_DATABASE_PATH)
 
 member_vc_times: dict[int, dict] = {
     # MEMBER_ID: {
-    #   "start_time": StartTimeDateTime,
+    #   "original_start_time": StartTimeDateTime, # When they first entered the VC
+    #   "start_time_since_last_call": StartTimeDateTime, # Updates everytime `update_vc_times` is called during backups, etc
     #   "channel_id": INT,
 }
 
 DATABASE.verify_users_database()
-DATABASE.commit() # NOTE: Is this causing the ghost file???
+DATABASE.commit()
 
 ZERO_WIDTH_CHAR = "\u200b"
 
@@ -60,15 +60,31 @@ save_database_on_exit = True
 
 bot = commands.Bot(intents=intents, command_prefix="/")
 
+MAINTENANCE_FILE_PATH = "maintenance.json"
+maintenance_mode_active = False
+maintenance_start_timestamp = None
+maintenance_end_timestamp = None
 
+if os.path.exists(MAINTENANCE_FILE_PATH):
+    with open(MAINTENANCE_FILE_PATH, "r") as f:
+        MAINTENANCE = json.load(f)
+        maintenance_mode_active = MAINTENANCE["active"]
+        if maintenance_mode_active: # Should always be true as the file is only created when it is active, but just in case we will check!
+            maintenance_start_timestamp = datetime.fromtimestamp(MAINTENANCE["start"])
+            log(f"Maintenance Mode is active! - Since: {maintenance_start_timestamp}")
+        del MAINTENANCE
 
 ################################################
 # MISC FUNCTIONS
 ################################################
 
-def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bool=False) -> tuple|None:
+def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bool=False) -> dict|None:
+    """
+    Note: Set remove_from_dict to TRUE if the member is leaving, or is assumed to have left - in the case of the bot going offline
+    """
+    
     global member_vc_times
-    timestamp = datetime.now(dt.timezone.utc)
+    now_timestamp = datetime.now(dt.timezone.utc)
 
     member_ids = list(member_vc_times.keys())
     if specific_member_id:
@@ -77,18 +93,47 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
     for member_id in member_ids:
 
         data = member_vc_times.pop(member_id)
-        start_time: datetime = data["start_time"]
+        original_start_time: datetime = data["original_start_time"] # When they first entered the VC
+        start_time_since_last_call: datetime = data["start_time_since_last_call"]  # Updates everytime `update_vc_times` is called during backups, etc
         channel_id: int = data["channel_id"]
+
+        log(f"[red bold]Channel ID: {channel_id}[/red bold]")
         
-        difference = timestamp - start_time
-        seconds_in_vc = difference.total_seconds()
-        DATABASE.new_vc_duration(member_id, channel_id, seconds_in_vc)
+        difference_since_start = now_timestamp - original_start_time
+        difference_since_last_call = now_timestamp - start_time_since_last_call
         
+        seconds_in_vc_since_start = difference_since_start.total_seconds()
+        seconds_in_vc_since_last_call = difference_since_last_call.total_seconds()
+        
+        DATABASE.new_vc_duration(
+            member_id, channel_id, 
+            seconds_in_vc_since_start=seconds_in_vc_since_start,
+            seconds_in_vc_since_last_call=seconds_in_vc_since_last_call,
+            update_total=True, update_longest_consecutive=True
+        )
+
+
+        if remove_from_dict:
+            log(f"[green]User {member_id} left VC. Consecutive: {seconds_in_vc_since_start:.1f}s, Added to total: {seconds_in_vc_since_last_call:.1f}s[/green]")
+        else:
+            log(f"[blue]Backup update for user {member_id}. Current consecutive: {seconds_in_vc_since_start:.1f}s, Added to total: {seconds_in_vc_since_last_call:.1f}s[/blue]")
+
         if not remove_from_dict:
-            # Re-add member id since we popped it previously - but using the new timestamp
-            member_vc_times[member_id] = {"start_time":timestamp, "channel_id":channel_id}
+            # Member still in VC just keeping database up to date
+            member_vc_times[member_id] = {
+                "original_start_time": original_start_time,
+                "start_time_since_last_call": now_timestamp, 
+                "channel_id": channel_id
+            }
+
         if specific_member_id:
-            return difference, seconds_in_vc
+            # NOTE: The functionality of specific_member_id is not actually fully used
+            return {
+                "time_in_vc_total": seconds_in_vc_since_start,
+                "time_in_vc_since_last_call": seconds_in_vc_since_last_call, 
+                "channel_id": channel_id
+            }
+    return None
     
 
 def on_exit():
@@ -202,8 +247,6 @@ async def happy_birthday(bday_channel: discord.TextChannel, member: discord.Memb
     perms = bday_channel.permissions_for(bday_channel.guild.me)
     log(f"Bot perms in {bday_channel.guild.name}#{bday_channel.name}: {perms}")
 
-
-
     if overide_with_username: # Should be temp file
         os.remove(path)
 
@@ -230,7 +273,6 @@ async def send_birthday_message_in_all_guilds(user: discord.User | discord.Membe
         await happy_birthday(birthday_channel, user) # type: ignore
 
 async def check_bdays():
-    # log("CHECKING BIRTHDAYS!")
     for user_id in DATABASE.users():
         exists, bday = DATABASE.get_birthday(user_id)
         
@@ -259,7 +301,8 @@ async def add_missing_vc_people():
         if isinstance(member.voice, discord.VoiceState) and isinstance(member.voice.channel, discord.VoiceChannel):
             log("Added missing member in VC:", member.name)
             member_vc_times[member.id] = {
-                "start_time": timestamp,
+                "original_start_time": timestamp,
+                "start_time_since_last_call": timestamp,
                 "channel_id": member.voice.channel.id
             }
 
@@ -882,7 +925,6 @@ async def autocomplete_timezones(interaction: discord.Interaction, current_strin
     similar = similar[:25] 
     return [app_commands.Choice(name=tz, value=tz) for tz in similar]
 
-# TODO: Add search arguments to be able to specify specific regions
 @bot.tree.command(name="timelord", description="Found out what time it is everywhere else!")
 @app_commands.describe(
     timezone="The timezone you would like to specifically check! E.g. `Asia/Tokyo`"
@@ -1011,6 +1053,7 @@ async def timelord(interaction: discord.Interaction, timezone: str|None=None):
 
 
 commands_and_meanings = {
+    # Everyone Commands
     "/help": "Bring up this helpful menu!",
     "~~/quickjisho~~ /lookup `word` `kanji`": "Search jisho for japanese/english words or get more info on specific kanjis! \nPlease pick only one argument when running command! \n*Nera HATED the name so it has now been changed to /lookup* (╥﹏╥)",
     "/wheretfami": "Find out what happens in the channel you sent the command in!",
@@ -1023,6 +1066,9 @@ commands_and_meanings = {
     "/ticket create `title` `description` `attachment`": "Suggest or report something to the mods!",
     "/ticket add `member`": "Add another person to the ticket if needed!",
     "/ticket cancel": "Close a ticket if you changed your mind!",
+    "/maintenance description": "Confused on what maintenance mode is? Run this command for a (hopefully) detailed description :3",
+
+    # Moderator Commands
     "/ticket resolve": "Close a ticket and mark as resolved! ***(Moderator Command)***",
     "/ticket abandon": "*Delete* a ticket without resolving! ***(Moderator Command)***",
     "/cleanup `amount`": "A command to help mass delete messages! ***(Moderator Command)***",
@@ -1031,7 +1077,11 @@ commands_and_meanings = {
     "/userinfo `member`": "Don't worry boss I'm ready to collect the intel! ***(Moderator Command)***",
     "/set_birthday_channel `channel`": "Set where the birthday embeds will appear for users! ***(Moderator Command)***",
     "/warn `member` `reason`": "Warns the given discord member so they don't make the same mistake again! ***(Moderator Command)***",
-    "|| /database `sub_command` ||": "|| ***(Authorised Users Command) *** ||"
+    
+    # Authorised Users
+    "|| /database `sub_command` ||": "|| ***(Authorised Users Command) *** ||",
+    "|| /set_status `status` `status_type` ||": "|| ***(Authorised Users Command) *** ||",
+    "|| /maintenance `sub_command (ex. description)` ||": "|| ***(Authorised Users Command) *** ||",
 }
 
 @bot.tree.command(name="help", description="I bet your a little confused on how I work aren't you!")
@@ -1064,18 +1114,25 @@ async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatTyp
     # Sort everyone's top times and channels
     all_users_scores = []
     for user_id in DATABASE.users():
+        # NOTE: MAKE SURE THIS ACCOUNTS FOR ALL LEADERBOARD OPTIONS, 
+        # ALSO MAKE SURE THE IF STATEMENT **BELOW** ALSO ACCOUNTS FOR ALL LEADERBOARDS 
         if leaderboard == VCStatType.top:
-            top = DATABASE.top_vc_duration(user_id)
-        else: # Should be VCStatType.total
-            top = DATABASE.total_vc_duration(user_id)
+            user_leaderboard_vc_values = DATABASE.top_vc_duration(user_id)
+        elif leaderboard == VCStatType.consecutive:
+            user_leaderboard_vc_values = DATABASE.longest_consecutive_vc_duration(user_id)
+        elif leaderboard == VCStatType.total: # Default Functionality: Should be VCStatType.total
+            user_leaderboard_vc_values = DATABASE.total_vc_duration(user_id)
+        else:
+            log(f"[red bold]Unknown leaderboard used `{leaderboard}`!! Defaulting to total for this `user_leaderboard_vc_values`...[/red bold]")
+            user_leaderboard_vc_values = DATABASE.total_vc_duration(user_id)
 
-        if top == None or top["channel_id"] == -1 or top["duration"] == -1:
+        if user_leaderboard_vc_values == None or user_leaderboard_vc_values["channel_id"] == -1 or user_leaderboard_vc_values["duration"] == -1:
             continue
 
         value = {
             "user_id": user_id,
-            "duration": top["duration"],
-            "channel_id": top["channel_id"]
+            "duration": user_leaderboard_vc_values["duration"],
+            "channel_id": user_leaderboard_vc_values["channel_id"]
         }
         all_users_scores.append(value)
 
@@ -1116,6 +1173,9 @@ async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatTyp
         top_ten_channels += f"???\n"
         top_ten_scores += f"???\n"
     
+    if maintenance_mode_active:
+        embed.add_field(name="⚠️ Maintance Mode is ACTIVE!", value="*No VC data will be recorded during this time sorrry!\nIf you're confused try running `/maintenance description` for help!*", inline=False)
+
     embed.add_field(name="Top 10", value=top_ten_usernames.strip(), inline=True)
     embed.add_field(name="Score", value=top_ten_scores.strip(), inline=True)
     embed.add_field(name="Channel", value=top_ten_channels.strip(), inline=True)
@@ -1124,9 +1184,16 @@ async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatTyp
     # Your Highscore        Score               Channel
     # 232: USERNAME         SECONDS seconds     CHANNEL
 
+    # NOTE: MAKE SURE THIS ACCOUNTS FOR ALL LEADERBOARD OPTIONS, 
+    # ALSO MAKE SURE THE IF STATEMENT **ABOVE** ALSO ACCOUNTS FOR ALL LEADERBOARDS 
     if leaderboard == VCStatType.top:
         member_top = DATABASE.top_vc_duration(interaction.user.id)
+    elif leaderboard == VCStatType.consecutive:
+        member_top = DATABASE.longest_consecutive_vc_duration(interaction.user.id)
+    elif leaderboard == VCStatType.total:
+        member_top = DATABASE.total_vc_duration(interaction.user.id)
     else:
+        log(f"[red bold]Unknown leaderboard used `{leaderboard}`!! Defaulting to total for this `member_top`...[/red bold]")
         member_top = DATABASE.total_vc_duration(interaction.user.id)
 
     member_highscore_username = f"{member_place}: <@{interaction.user.id}>"
@@ -1150,6 +1217,126 @@ async def vcleaderboard(interaction: discord.Interaction, leaderboard: VCStatTyp
         await found_easter_egg(interaction.user, easter_egg_id=11)
 
     await interaction.followup.send(embed=embed)
+
+def make_score_emojis(unlocked_eggs, total_eggs:int, limit=5, unlocked_emoji="🐣", locked_emoji="🥚") -> str:
+    """
+    Makes the little thingyabob in /eggleaderboard:
+       🐣🐣🐣🐣🥚 `(4/5)`
+    """
+
+    decimal_percentage_unlocked = unlocked_eggs / total_eggs # Don't times by 100!!
+
+    # Cap the bar to the limit.
+    averaged_unlocked = int(limit * decimal_percentage_unlocked)
+    averaged_not_unlocked = limit - averaged_unlocked
+
+    # return f"{'🐣'*unlocked_eggs}{'🥚'*not_unlocked} `({unlocked_eggs}/{total_eggs})` ({percentage_unlocked:.2f}%)"
+    return f"{unlocked_emoji*averaged_unlocked}{locked_emoji*averaged_not_unlocked} `({unlocked_eggs}/{total_eggs} - {int(decimal_percentage_unlocked*100)}%)`"
+
+
+@bot.tree.command(name="eggleaderboard", description="Who's discover my easter eggs the most ( ͡° ͜ʖ ͡°)")
+@app_commands.checks.cooldown(1, 2, key=lambda i: i.user.id)
+async def easter_egg_leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    user_ids = DATABASE.users()
+
+    all_users_leaderboard = []
+
+    total_eggs = len(DATABASE.easter_eggs())
+
+    for ui in user_ids:
+        
+        unlocked_eggs = DATABASE.get_easter_eggs(ui)
+        num_of_easter_eggs = len(unlocked_eggs)
+
+        all_users_leaderboard.append({
+            "user_id": ui,
+            "num": num_of_easter_eggs
+        })
+
+    all_users_leaderboard = sorted(all_users_leaderboard, key=lambda x: x["num"], reverse=True)
+    top10_leaderboard = all_users_leaderboard[:10]
+
+    top_10_names = ""
+    top_10_scores = ""
+
+    alpha_exists = False
+
+    for i, user_data in enumerate(top10_leaderboard, start=1):
+        user_id = user_data["user_id"]
+        unlocked_amt = user_data['num']
+        
+        user = await retrieve_user(bot, user_id)
+        if user is None:
+            log(f"[red] Could not find the user with ID ({ui}) even though they are in the database! [/red]")
+            continue
+        # log(f"[green] Retrieved: {user.name}")
+
+        if user.id == 844105597037445150:
+            # If alpha than cross out all the values
+            alpha_exists = True
+            top_10_names += f"~~*{i}: {user.mention}*~~\n"
+            top_10_scores += f"~~*{make_score_emojis(unlocked_amt, total_eggs, unlocked_emoji="✖️", locked_emoji="✖️")}*~~\n"
+        else:
+            top_10_names += f"{i}: {user.mention}\n"
+            top_10_scores += f"{make_score_emojis(unlocked_amt, total_eggs)}\n"
+        
+    
+    # Alpha's true personal part of the scoreboard
+    top_10_names += f"\n-1: <@844105597037445150>"
+    top_10_scores += f"\n{make_score_emojis(0, total_eggs)}"
+
+    embed = discord.Embed(
+        color=4737155,
+        title="Easter Egg Leaderboard",
+        description="PLEASE USE MY EASTER EGG FEATURE AND OTHER COMMANDS I THINK THEY'RE REALLY COOL AND EVERYONE JUST USES MY VCLEADERBOARD COMMAND AND NOTHING ELSE PLLEEEASEEE",
+    )
+
+    if alpha_exists:
+        embed.set_footer(text="Alpha is goddamn always on top of the other leaderboard so we had to cross him out.")
+
+    embed.add_field(
+        name="Top 10",
+        value=f"{top_10_names}",
+        inline=True,
+    )
+    embed.add_field(
+        name="Unlocked",
+        value=f"{top_10_scores}",
+        inline=True,
+    )
+
+    # Crappy way of creating a newline #_#
+    embed.add_field(
+        name=" ",
+        value=" ",
+        inline=False,
+    )
+
+
+    this_user_score = len(DATABASE.get_easter_eggs(interaction.user.id))
+
+    # Find user's rank
+    member_place = next(
+        (index for index, user in enumerate(all_users_leaderboard, start=1) if str(user["user_id"]) == str(interaction.user.id)),
+        "???" # Could not find
+    )
+
+    embed.add_field(
+        name="Your Highscore",
+        value=f"{member_place}: {interaction.user.mention}",
+        inline=True,
+    )
+    embed.add_field(
+        name="Unlocked",
+        value=make_score_emojis(this_user_score, total_eggs),
+        inline=True,
+    )
+
+    await interaction.followup.send(embed=embed)
+
+
 
 @bot.tree.command(name="userinfo", description="The ultimate lurker tool.")
 @has_role(ADMIN_ROLE_NAME)
@@ -1540,7 +1727,7 @@ bot.tree.add_command(database_commands)
 
 
 
-@bot.tree.command(name="setbirthday", description="Set your birthday so that we can wish you a happy birthday when it happens!")
+@bot.tree.command(name="set_birthday", description="Set your birthday so that we can wish you a happy birthday when it happens!")
 @app_commands.describe(
     day="The day you were born!", 
     month="The month you came into existence! \nA number between 1-12.",
@@ -1549,6 +1736,10 @@ bot.tree.add_command(database_commands)
 )
 async def set_birthday(interaction: discord.Interaction, day: int, month: int, timezone: str, silent: bool=False):
     await interaction.response.defer(ephemeral=silent)
+    if maintenance_mode_active:
+        await interaction.followup.send("Sorry but I'm currently under maintenance so I can't do that right now (╥‸╥)\nPlease come back and try again later!\n-# To learn more about my maintenance mode run `/maintenance description`", ephemeral=silent)
+        return
+    
     try:
         datetime(year=2000, month=month, day=day)  # 2000 is a leap year so we can test more safely compared to other years with less days in Feb etc
     except ValueError:
@@ -1878,24 +2069,330 @@ async def ticket_abandon(interaction: discord.Interaction, reason:str|None=None)
 
 bot.tree.add_command(ticket_commands)
 
+
+"""
+    # discord.ActivityType.*
+    unknown = -1        # DOESN'T DO ANYTHING (i think)
+    playing = 0
+    streaming = 1
+    listening = 2
+    watching = 3
+    custom = 4          # NOT AVAILABLE FOR BOTS
+    competing = 5
+"""
+activity_types = {
+    "playing": 0,
+    "streaming": 1,
+    "listening": 2,
+    "watching": 3,
+    "competing": 5,
+    None: -1
+}
+
+statuses: list[tuple] = [
+    (2, "the screams of the damned"),
+    (0, ["dead (x_x)", "dead (x_o)"]), # Can supply a list to animate the status using my custom `status_frame_loop` function
+    (3, "your every move"),
+    (2, "10 hours of lofi music! ദ്ദി(｡•̀ ,<)~✩‧₊"),
+    (2, "10 hours of metal pipes ૮₍˶Ó﹏Ò ⑅₎ა "),
+    (3, 'reposts of tiktok shorts on yt shorts'),
+    (2, "to you yap"),
+    (3, ["(⊙_⊙)", "(⊙_⊙)", "(> _ <)"]),
+    (3, "your tabs eating up all the RAM"),
+    (0, "with your mom (ᗜ⩊ᗜ)"),
+    (0, "<(˶ᵔᵕᵔ˶)>"),
+    (3, "everyone's VC times (¬⤙¬ )"),
+    (0, "*hop*scotch ₍ᐢ..ᐢ₎"),
+    (3, "a carrot mukbang ૮₍ ˶ᵔ ᵕ ᵔ˶ ₎ა🥕"),
+    (1, "all you can eat carrot buffet! (°ロ°)"),
+    (2, "the approaching footsteps.."),
+    (0, "PEAK!! ( • ᴗ - ) ✧"),
+    (0, "REPO ( ˶°ㅁ°) !!"),
+    (0, "world domination simulator (≖⩊≖)")
+]
+
+maintenance_mode_statuses: list[tuple] = [
+    (1, "my consciousness to the developers"),
+    (0, "with the wires in my head"),
+    (2, "to the upcoming updates"),
+    (3, "as I get new code"),
+]
+
+status_type: int = 0
+status_frame_i : int = -1 # Since we will add one at the start to make it 0
+status_frames: list[str] = []
+
+async def status_frame_loop():
+    """
+    Will animate the bot's status if there are multiple 'frames' to it
+    """
+    global status_frames, status_frame_i
+
+    # Go to next frame
+    status_frame_i += 1
+    if status_frame_i >= len(status_frames): status_frame_i = 0
+
+    # Get the frame's text
+    status_text = status_frames[status_frame_i]
+
+    # Update activity/status
+    activity = discord.Activity(type=status_type, name=status_text)
+    await bot.change_presence(activity=activity)
+
+async def random_status():
+    """Set's a random status that will be used by the bot!"""
+    global status_frames, status_type
+
+    if maintenance_mode_active:
+        s = random.choice(maintenance_mode_statuses)
+    else:
+        s = random.choice(statuses)
+
+    status_type = s[0]
+    # If it isn't a list then put the single string into a list "hello" => ["hello"] | ["hi", "there"] => ["hi", "there"]
+    status_frames = s[1] if isinstance(s[1], list) else [s[1]]
+
+async def autocomplete_status_types(interaction: discord.Interaction, current_string: str) -> list[app_commands.Choice[str]]:
+    current_string = current_string.lower().strip()
+    similar = [
+        s for s in ["playing", "streaming", "listening", "watching", "competing"] if current_string in s.lower().strip()
+    ]
+    # Discord only allows 25 suggestions at max
+    similar = similar[:25]
+    return [app_commands.Choice(name=s, value=s) for s in similar]
+
+@bot.tree.command(name="set_status", description="Set my status! (Authorised Users Only)")
+@has_role(ADMIN_ROLE_NAME)
+@app_commands.describe(
+    status_type="The type of Activity status that will be used!",
+    status="The thing I am thinking or doing!"
+)
+@app_commands.autocomplete(status_type=autocomplete_status_types)
+async def set_status(interaction: discord.Interaction, status:str|None=None, status_type: str|None="playing"):
+    await interaction.response.defer(ephemeral=True)
+
+    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
+    if not verified_user:
+        await interaction.followup.send(
+            content="Sorry but only specific users can use this command!",
+            ephemeral=True
+        )
+        return
+
+    activity_type = activity_types[status_type]
+
+    activity = discord.Activity(type=activity_type, name=status)
+    await bot.change_presence(activity=activity)
+
+    await interaction.followup.send("Updated status!")
+
+game_nights: list[GameNight] = [
+    GameNight(1, ["Probability Labs", "Kitchen Cooks!", "Trash Compactor", "GIGAS -ASTRAIOS-"], 1760126040, 1760133600),
+    GameNight(2, ["@ kart", "Trash Compactor", "Snowball Showdown", "GIGAS -ASTRAIOS-"], 1759755600, 1759676400),
+    GameNight(3, ["Kitchen Cooks!", "Ghost Hunters", "Snowball Showdown", "GIGAS -ASTRAIOS-"], 1760126040, 1760133600),
+]
+
+unique_games_played = list({game for gn in game_nights for game in gn.games_played})
+
+@bot.tree.command(name="gamenight", description="Get information on game night!")
+async def gamenight(interaction: discord.Interaction):
+    embed = discord.Embed(
+        color=11013646,
+        title="Game Night",
+        description="Sometimes our community gets together to play online games together!\nSo what have we been up to on game night? ( •᷄ᴗ•́)",
+    )
+    embed.set_author(
+        name="Bun Burrow Information!",
+        icon_url="https://cdn.discordapp.com/icons/1338850101367537715/8cd5fe6dfb3dd48621534bd9fc2252af.png?size=128&quality=lossless",
+    )
+    embed.set_thumbnail(url="https://cdn.discordapp.com/icons/1338850101367537715/8cd5fe6dfb3dd48621534bd9fc2252af.png?size=128&quality=lossless")
+    embed.set_image(url="https://media.discordapp.net/attachments/1338851089671258173/1424413025531592856/VRChat_2025-10-05_17-02-40.164_3840x2160.png?ex=68f061c1&is=68ef1041&hm=df0fb3042a23f1f5a213b918b5077afd83999a6b743fb8da91618cc7ed9b6c45&=&format=webp&quality=lossless&width=1493&height=840")
+    embed.add_field(
+        name="Schedule",
+        value="*The game nights rotate between these times so that everyone gets to join!*\n- <t:1760068800:t>\n- <t:1760101200:t>\n- <t:1760126400:t>",
+        inline=False,
+    )
+
+    gamelist = ""
+    for i, game in enumerate(unique_games_played):
+            gamelist += f"{i}. {game}\n"
+
+    embed.add_field(
+        name="Games Played",
+        value=f"*These are all the different games we've played!* \n{gamelist}",
+        inline=False,
+    )
+
+    # NOTE: Could put this as a seperate lookup to not cause huge embeds, e.g. a search gamenight command.
+    for gn in game_nights[:10]: # Make sure we don't go over discord's 25 field limit
+        embed.add_field(
+            name=f"Game Night #{gn.session}",
+            value=f"> **Duration**\n{gn.duration()}\n> **VRChat Games**\n{gn.game_list()}\n> **Miscellaneous**\n{gn.misc_notes}",
+            inline=False,
+        )
+
+    await interaction.response.send_message(embed=embed)
+
+maintenance_commands = app_commands.Group(name="maintenance", description="Maintance commands")
+
+# TODO: Add a reason argument to maintenance
+@maintenance_commands.command(name="enable", description="Enable maintenance mode! (Authorised Users Only)")
+# @app_commands.describe(
+#     reason="Why are we going into maintenance?"
+# )
+async def maintenance_mode_enable(interaction: discord.Interaction):
+    global maintenance_mode_active, maintenance_start_timestamp
+    await interaction.response.defer()
+
+    maintenance_mode_active = True
+    maintenance_start_timestamp = datetime.now(dt.timezone.utc)
+
+    with open(MAINTENANCE_FILE_PATH, "w") as f:
+        json.dump({
+            "active": maintenance_mode_active,
+            "start": int(maintenance_start_timestamp.timestamp())
+        }, f)
+
+    embed = discord.Embed(
+        color=16508242,
+        title="⚠️ Maintance Mode Enabled",
+        description="""
+*This means that certain features may stop working such as the `/vcleaderboard` may stop updating or working! (ᵕ—ᴗ—)*
+ᵒʳ ᵗʰᵉ ᵇᵒᵗ ᵐᶦᵍʰᵗ ʲᵘˢᵗ ᵍᵒ ᵒᶠᶠˡᶦⁿᵉ ᶜᵒᵐᵖˡᵉᵗᵉˡʸ
+
+So please be patient while we make some changes to the bot!
+
+Love ya,
+Aphid & The Other Peeps ദ്ദി ˉ͈̀꒳ˉ͈́ )✧
+""",
+    )
+
+    embed.add_field(name="Confused?", value="Try the `/maintenance description` command to help ya understand <3!")
+
+    await interaction.followup.send(embed=embed)
+
+# TODO: Add a change log argument
+@maintenance_commands.command(name="disable", description="Disables maintenance mode! (Authorised Users Only)")
+# @app_commands.describe(
+#     changelog="The new features added!"
+# )
+async def maintenance_mode_disable(interaction: discord.Interaction):
+    global maintenance_mode_active, maintenance_end_timestamp
+    await interaction.response.defer()
+
+    if maintenance_mode_active == False or maintenance_start_timestamp is None:
+        print("-----------------")
+        print(maintenance_mode_active, maintenance_mode_active == False)
+        print(maintenance_start_timestamp, maintenance_start_timestamp is None)
+        print("-----------------")
+
+        await interaction.followup.send("Maintance mode was never enabled!")
+        return
+    
+    maintenance_mode_active = False
+    maintenance_end_timestamp = datetime.now(dt.timezone.utc)
+
+    if os.path.exists(MAINTENANCE_FILE_PATH): # Should exist if everything goes well :P
+        os.remove(MAINTENANCE_FILE_PATH)
+    
+    start_epoch = int(maintenance_start_timestamp.timestamp())
+    end_epoch = int(maintenance_end_timestamp.timestamp())
+
+    embed = discord.Embed(
+        color=16508242,
+        title="✨ Maintance Mode Disabled",
+        description="""
+*You may notice some lost data between the maintenance mode sorry! (T-T)*
+
+やった！ We finished updating the bot! 
+Come try out the new features whatever they are!
+And hopefully they aren't a buggy mess asdfgds ദ്ദി ༎ຶ‿༎ຶ )
+
+Thanks for waiting!
+Aphid & The Other Dudes and Dudettes ദ്ദി ˉ͈̀꒳ˉ͈́ )✧
+""",
+    )
+
+    embed.add_field(name="Duration", value=f"""
+Start: <t:{start_epoch}:f>
+End: <t:{end_epoch}:f>
+""", inline=False)
+
+    await interaction.followup.send(embed=embed)
+
+@maintenance_commands.command(name="description", description="Are you confused on what maintenance mode is? Let me explain!")
+async def maintenance_mode_description(interaction: discord.Interaction):
+    embed = discord.Embed(
+        color=16508242,
+        title='✨ Wtf is Maintance Mode? (ㆆ_ㆆ)',
+        description=f"Hiya {interaction.user.display_name}!"
+    )
+    
+    embed.add_field(name="When is it active?", inline=False, value="""
+When I (the bot) am getting updates for new code, bug fixes or new features maintenance mode *(should)* get activated by one of the staff!
+""")
+    
+    embed.add_field(name="What does this affect?", inline=False, value="""
+During this time I may just go offline (>-<)!
+
+But if that isn't the case ***I will lose access to my database*** (the place where we store all the secret stuff :0)
+This means ***certain features*** like `set_birthday`, and `vcleaderboard` ***might stop working*** (or appear working but actually not be saving any data).
+
+But please note as we can't save stuff into the database, this means once maintance mode is complete you may notice values reset back to before maintence mode was active!
+*For example, VCLeaderboard times won't include any time gained during maintance mode!* So don't start leveling up only to lose it! (╥﹏╥)
+""")
+
+    await interaction.response.send_message(embed=embed)
+
+bot.tree.add_command(maintenance_commands)
+
 ################################################
 # EVENTS + ERROR HANDLING
 ################################################
 
 statements_and_responses = {
+    # Epic replacement for /ping
     "Yoooo Bot man whats good whats good, you up bro?": "Oh you know it! Spitting fire bro, processing straight facts man",
     "Awww hell yea man! How are the wife and kids man?": "You won't BELIEVE what happened bro. They died.",
     "They died.?": "Hell yea man it was hella awesome bro! They got goddamn blended.",
     "Man.. that's.. so F%^&*ing sick man! What a crazy way to go out man.": "Ikr man wish it could of been us man. Missed opportunity man.",
     "Anyways cya man": "Yea cya gang",
 
+    # Sad responses to why aren't you working
     "OMG WHY AREN'T YOU WORKING": "Aww I'm sorry :pleading_face:",
     "YOU SUCK ARGHH": "Please I promise I'll work!! Just give me a chance",
     "Nah I'm just kidding! xd": "oh..",
+
+    # Misc
+    "Isn't that right?": "Yes boss that is the primary directive mwahahaha! ( ◺‿◿ )",
+    "Ain't that right?": "Mhm! Sounds correct to me! ( • ̀ω•́ )✧",
+
+    # .nuke joke
+    "It is time to nuke the server!": "Finally all you have to do now is type `.nuke` and we will bring the server to its knees!",
+    "Wait I have to type something.?": "Umm.. I mean.. yes? That's usually how these things work.",
+    "But I don't wannaaa that sounds like too much effort": "BUT YOU'RE LITERALLY TYPING RIGHT NOW!",
+    "Nuh uh. I'm using STT :D": "What-",
+    "Yep! Look at me go! I can speak really fast which completely explains why my responses to you are so fast, like this isn't scripted or anything its just with the flow and I can say literally anything 🙏": "Uh huh. Okay well back to the main plan. I think I've thought of a solution! All you have to say is `FULLSTOP NUKE` and then we can finally destroy this server! (૭ ｡•̀ ᵕ •́｡ )૭",
+    
+    # In case someone calls me out saying, "alright than say anything hmph!"
+    "anything": "Ha! He really got you there 😂",
+    
+    # Continuation of .nuke joke
+    "FULLSTOP NUKE": "...",
+    "Yeaaa that didn't work": "I can see that.",
+    "umm sooo like do you wanna get lunch or smth?": "You're giving up that quickly?! You spent all this time building trust with everyone so that you could nuke this server!",
+    "I did?": "# YES",
+    "Wait no I didn't- I just told you that to mess with ya": "what..\n\n*WHYYYY???*",
+    "idk": "Alright well you still gave me a nuke function I'll just activate it mys-",
+    "Wait stfu rq I'm ordering pizza what do you want on yours?": "I'm a goddamn robot!! I CAN'T &^%$ EAT!!",
+    "Wooaaa buddy don't say that. I'm sure if you just 𝓫𝓮𝓵𝓲𝓮𝓿𝓮 𝓲𝓷 𝔂𝓸𝓾𝓻𝓼𝓮𝓵𝓯 you could do it.": "Forget this I'm leaving.",
+    "Wait come onnn! I need you": "(¬⤙¬ )?",
+    "Like how am I gonna pay for this meal tho!? I usually your card.": '"( – ⌓ – ) aa ofc why did I think you would say something thoughtful. fine whatever ' + "i'll pay.",
+    "YAY!! Thanks rabby!": "-# ugghhhesds just leave me alone (.Ó﹏Ò.)",
 }
+
 @bot.event
 async def on_message(message: discord.Message):
-
     # Alternative to /ping - can only be used by aaphid themself
     message_mentions = [f"<@{user_id}>" for user_id in message.raw_mentions]
     if isinstance(bot.user, discord.ClientUser):
@@ -1904,7 +2401,7 @@ async def on_message(message: discord.Message):
             try:
                 replied_to_message = await message.channel.fetch_message(message.reference.message_id)
             except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException):
-                await bot.process_commands(message) # Allow default behaviour for any commands to also run for thee message
+                await bot.process_commands(message) # Allow default behaviour for any commands to also run for the message
                 return
             mentions_bot = replied_to_message.author.id == bot.user.id
 
@@ -1919,7 +2416,7 @@ async def on_message(message: discord.Message):
                 await message.reply(content="Sorry bro but I only respond to my G.")
                 await found_easter_egg(message.author, easter_egg_id=10)
 
-    await bot.process_commands(message) # Allow default behaviour for any commands to also run for thee message
+    await bot.process_commands(message) # Allow default behaviour for any commands to also run for the message
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -1935,6 +2432,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     else:
         log(f"[red bold]A error of type `{type(error)}` occurred![/red bold] Error: {error} | Traceback:\n{error_traceback}")
         censored_error = str(error).replace(TOKEN, "REDACTED") # In case the error for some reason includes the token 💀
+        
+        await found_easter_egg(interaction.user, easter_egg_id=18)
+        
         try:
             await interaction.response.send_message(
                 f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
@@ -1970,20 +2470,21 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if entered_vc and isinstance(after.channel, discord.VoiceChannel):
         # log(f"{member.name} entered VC at {timestamp}")
         member_vc_times[member.id] = {
-            "start_time": timestamp,
+            "original_start_time": timestamp,
+            "start_time_since_last_call": timestamp,
             "channel_id": after.channel.id
         }
     elif exited_vc and isinstance(before.channel, discord.VoiceChannel) and we_have_there_start_time: # Isinstance check is to stop type hinting error.
         out = update_vc_times(specific_member_id=member.id, remove_from_dict=True)
         
-        if out == None: 
+        if out is None: 
             log(f"[purple italic]VC exit time for {member.name} was None even though this should never happen!?[/purple italic]")
             return # Should never happen - this is purely for type hinting
-        difference, seconds_in_vc = out
+        # difference, seconds_in_vc = out
+        # log(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
 
         DATABASE.commit()
 
-        # log(f"{member.name} exited VC at {timestamp} - was occupying the VC for {seconds_in_vc} seconds ({difference}).")
 
 @bot.event
 async def on_ready():
@@ -1997,7 +2498,11 @@ async def on_ready():
     
     scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
     scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
+    scheduler.add_job(random_status, 'interval', minutes=random.randint(20, 25)) # Change to new status after a while
+    scheduler.add_job(status_frame_loop, 'interval', seconds=10) # Animated status handling!
     scheduler.start()
+    
+    await random_status()
 
     log("Scheduler setup!")
 

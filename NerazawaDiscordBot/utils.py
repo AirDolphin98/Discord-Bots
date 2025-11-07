@@ -3,7 +3,9 @@ import json, os, pprint, discord, typing
 from rich import print
 from enum import Enum
 from datetime import datetime
+from dataclasses import dataclass
 import datetime as dt
+from discord.ext import commands
 
 def abs_path_of(filename: str):
     """Assumes filename is a file/folder in the same directory as this"""
@@ -12,6 +14,23 @@ def abs_path_of(filename: str):
 def log(*values):
     print(f"[bold]Nerazawa Bot:[/bold]", *values)
 
+
+@dataclass
+class GameNight():
+    session: int
+    games_played: list
+    start_timestamp: int
+    end_timestamp: int
+    misc_notes: str = "No further notes (>.<)"
+
+    def game_list(self) -> str:
+        gamelist = ""
+        for i, game in enumerate(self.games_played):
+            gamelist += f"{i}. {game}\n"
+        return gamelist.strip()
+    
+    def duration(self) -> str:
+        return f"<t:{self.start_timestamp}:f> - <t:{self.end_timestamp}:f>"
 
 class JSONDatabase:
     _instance = None
@@ -24,20 +43,20 @@ class JSONDatabase:
         self._load(file_path)
         self.easter_eggs_db = self.load_json(easter_eggs_path)
         
-    def _load(self, file_path):
+    def _load(self, file_path, encoding='utf-8'):
         """
         Loads main.json ONLY
         """
         log(f"Loading database from: {file_path}")
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding=encoding) as f:
             self.data: dict = json.load(f)
         log(f"Database loaded successfully. Users count: {len(self.data.get('users', {}))}")
 
-    def load_json(self, file_path):
+    def load_json(self, file_path, encoding='utf-8'):
         """
         Loads any json file, and returns it.
         """
-        with open(abs_path_of(file_path), 'r') as f:
+        with open(abs_path_of(file_path), 'r', encoding=encoding) as f:
             data: dict = json.load(f)
         return data
 
@@ -117,28 +136,37 @@ class JSONDatabase:
             # Now process each channel normally
             for channel_id in user["vc_durations"].keys():
                 data: dict = user["vc_durations"][channel_id]
-                has_longest_duration_value = "longest_duration_seconds" in data.keys()
+                
                 has_total_duration_value = "total_time_seconds" in data.keys()
                 
+                # NOTE: Is also checked within the _validate_vc_data function!
+                has_old_longest_consecutive_duration_name = "longest_duration_seconds" in data.keys()
+                if has_old_longest_consecutive_duration_name:
+                    log("Updating old name `longest_duration_seconds` to new the new name `longest_consecutive_duration_seconds`")
+                    data["longest_consecutive_duration_seconds"] =  data["longest_duration_seconds"]
+                    data.pop("longest_duration_seconds")
+
+                has_longest_duration_value = "longest_consecutive_duration_seconds" in data.keys()
+
                 if not has_longest_duration_value:
-                    log(f"Added missing `longest_duration_seconds` in `vc_durations` for user {u_id}")
+                    log(f"Added missing `longest_consecutive_duration_seconds` in `vc_durations` for user {u_id}")
                     if has_total_duration_value:
-                        data["longest_duration_seconds"] = data["total_time_seconds"]
+                        data["longest_consecutive_duration_seconds"] = data["total_time_seconds"]
                     else:
-                        data["longest_duration_seconds"] = 0
+                        data["longest_consecutive_duration_seconds"] = 0
 
                 if not has_total_duration_value:
                     log(f"Added missing `total_time_seconds` in `vc_durations` for user {u_id}")
                     if has_longest_duration_value:
-                        data["total_time_seconds"] = data["longest_duration_seconds"]
+                        data["total_time_seconds"] = data["longest_consecutive_duration_seconds"]
                     else:
                         data["total_time_seconds"] = 0
                         
                 if has_longest_duration_value and has_total_duration_value:
                     # Fix if total time is less than the longest recorded time
-                    if data["total_time_seconds"] < data["longest_duration_seconds"]:
-                        log(f"Fixed `total_time_seconds` being less than `longest_duration_seconds` for user {u_id}")
-                        data["total_time_seconds"] = data["longest_duration_seconds"]
+                    if data["total_time_seconds"] < data["longest_consecutive_duration_seconds"]:
+                        log(f"Fixed `total_time_seconds` being less than `longest_consecutive_duration_seconds` for user {u_id}")
+                        data["total_time_seconds"] = data["longest_consecutive_duration_seconds"]
 
             # BIRTHDAY
             if "birthday" not in user.keys():
@@ -167,6 +195,12 @@ class JSONDatabase:
             data: dict
             channel_id_str = str(channel_id)
             
+            has_old_longest_consecutive_duration_name = "longest_duration_seconds" in data.keys()
+            if has_old_longest_consecutive_duration_name:
+                log("Updating old name `longest_duration_seconds` to new the new name `longest_consecutive_duration_seconds`")
+                data["longest_consecutive_duration_seconds"] =  data["longest_duration_seconds"]
+                data.pop("longest_duration_seconds")
+
             if channel_id_str in seen_channels:
                 # THIS IS A DUPLICATE CHANNEL
 
@@ -175,8 +209,8 @@ class JSONDatabase:
 
                 # Determine if current longest is bigger then duplicate longest - set which ever is bigger to be the true longest
                 true_longest = max(
-                    existing["longest_duration_seconds"],
-                    data.get("longest_duration_seconds", 0)
+                    existing["longest_consecutive_duration_seconds"],
+                    data.get("longest_consecutive_duration_seconds", 0)
                 ),
 
                 # The total time added with the duplicate
@@ -184,14 +218,14 @@ class JSONDatabase:
 
                 # Add values to cleaned
                 clean_data[channel_id_str] = {
-                    "longest_duration_seconds": true_longest,
+                    "longest_consecutive_duration_seconds": true_longest,
                     "total_time_seconds": total_total
                 }
             else:
                 # Haven't check this channel so it isn't a duplicate (yet)!
                 # So set as whatever is given or 0
                 clean_data[channel_id_str] = {
-                    "longest_duration_seconds": data.get("longest_duration_seconds", 0),
+                    "longest_consecutive_duration_seconds": data.get("longest_consecutive_duration_seconds", 0),
                     "total_time_seconds": data.get("total_time_seconds", 0)
                 }
                 # So that we know any further occurrences are duplicates!!
@@ -231,7 +265,7 @@ class JSONDatabase:
         vc_durations: dict = user.get("vc_durations", {})
         if channel_id not in vc_durations.keys():
             vc_durations[str(channel_id)] = {
-                "longest_duration_seconds": 0,
+                "longest_consecutive_duration_seconds": 0,
                 "total_time_seconds": 0
             }
             user["vc_durations"] = vc_durations
@@ -248,10 +282,10 @@ class JSONDatabase:
 
         return user["vc_durations"][channel_id]
 
-    def new_vc_duration(self, user_id: int|str, channel_id: int|str, length_seconds: int|float):
+    def new_vc_duration(self, user_id: int|str, channel_id: int|str, seconds_in_vc_since_start: int|float, seconds_in_vc_since_last_call: int|float, update_total=True, update_longest_consecutive=True):
         """
-        Override `longest_duration_seconds` value if given value is longer.
-        Also adds `length_seconds` to `total_time_seconds` value for this VC.
+        Override `longest_consecutive_duration_seconds` value if `seconds_in_vc_since_start` is longer.
+        Also adds `seconds_in_vc_since_last_call` to `total_time_seconds` value for this VC.
 
         Please use `set_vc_duration` instead so that it can check automatically if the length is longer.
         """
@@ -262,21 +296,24 @@ class JSONDatabase:
             if "vc_durations" not in user:
                 user["vc_durations"] = {}
             user["vc_durations"][str(channel_id)] = {
-                "longest_duration_seconds": 0,
+                "longest_consecutive_duration_seconds": 0,
                 "total_time_seconds": 0
             }
         
         # Get current VC data for that user
         channel_data = user["vc_durations"][str(channel_id)]
         
-        # If new length_seconds is longer set it as the new longest_duration_seconds record for that VC
-        channel_data["longest_duration_seconds"] = max(
-            channel_data["longest_duration_seconds"], 
-            length_seconds
-        )
-        # Add time to total seconds
-        channel_data["total_time_seconds"] += length_seconds
-        
+        if update_longest_consecutive:
+            # If new seconds_in_vc_since_start is longer set it as the new longest_consecutive_duration_seconds record for that VC
+            channel_data["longest_consecutive_duration_seconds"] = max(
+                channel_data["longest_consecutive_duration_seconds"], 
+                seconds_in_vc_since_start
+            )
+
+        if update_total:
+            # Add time to total seconds
+            channel_data["total_time_seconds"] += seconds_in_vc_since_last_call
+            
         # Set new data back into user
         self.set_user(user_id, user)
 
@@ -289,6 +326,17 @@ class JSONDatabase:
         self._add_missing_vc_duration_channel(user_id, channel_id)
 
         return user["vc_durations"][channel_id]["total_time_seconds"]
+
+    def get_easter_eggs(self, user_id: int|str) -> list[EasterEgg]:
+        user = self.user(user_id)
+        user_eggs = []
+
+        for e in user["unlocked_easter_eggs"]:
+            egg_id = e["egg_id"]
+            attained_timestamp = e["timestamp"]
+
+            user_eggs.append(EasterEgg(egg_id, self))
+        return user_eggs
 
 
     def add_warning(self, user_id: int|str, warning_message: str, moderator_id: int):
@@ -327,9 +375,9 @@ class JSONDatabase:
         return exists, user["birthday"]
 
 
-    def top_vc_duration(self, user_id: int|str) -> dict:
+    def longest_consecutive_vc_duration(self, user_id: int|str) -> dict:
         """
-        Get the duration of the longest VC channel they have been in. Also returns user's channel.
+        Get the duration of the longest time they've been in a VC channel. Also returns user's channel.
         """
         top_duration = -1
         top_channel_id = -1
@@ -338,7 +386,7 @@ class JSONDatabase:
             channel_ids = self.user(user_id)["vc_durations"].keys()
             for c_id in channel_ids:
                 data = self.get_vc_duration(user_id, c_id)
-                channel_top_duration = data["longest_duration_seconds"]
+                channel_top_duration = data["longest_consecutive_duration_seconds"]
                 if channel_top_duration > top_duration:
                     top_duration = channel_top_duration
                     top_channel_id = c_id
@@ -352,6 +400,31 @@ class JSONDatabase:
             "channel_id": top_channel_id
         }
     
+    def top_vc_duration(self, user_id: int|str) -> dict:
+        """
+        Get the longest duration of they've been in VC channel they have been in. Also returns user's channel.
+        """
+        top_duration = -1
+        top_channel_id = -1
+
+        try:
+            channel_ids = self.user(user_id)["vc_durations"].keys()
+            for c_id in channel_ids:
+                data = self.get_vc_duration(user_id, c_id)
+                channel_top_duration = data["total_time_seconds"]
+                if channel_top_duration > top_duration:
+                    top_duration = channel_top_duration
+                    top_channel_id = c_id
+
+        except KeyError as e: # Shouldn't happen if `verify_users_database` was run at the start of the script!
+            log(f"[WARN] Error while finding *top* vc duration for user of id: {user_id}. Make sure you ran `verify_users_database` at the start of your script! Error: {e}")
+
+        return {
+            "found": top_duration != -1 and top_channel_id != -1,
+            "duration": top_duration,
+            "channel_id": top_channel_id
+        }
+
     def total_vc_duration(self, user_id: int|str) -> dict:
         total_duration = -1
 
@@ -497,9 +570,88 @@ class EasterEgg():
 class VCStatType(Enum):
     top = "top"
     total = "total"
+    consecutive = "consecutive"
+    default = "total"
 
     def __str__(self):
         return self.value
+
+async def retrieve_user(bot:commands.Bot, user_id) -> discord.User | None:
+    """
+    Tries the `get_user` command and if that fails also tries the `fetch_user` command
+    """
+
+    user = bot.get_user(user_id)
+    if user is None:
+        user = await bot.fetch_user(user_id)
+    return user
+    
+
+@dataclass
+class LeaderboardEntry():
+    """
+    Entry object of the leaderboards
+    """
+    user_id: str | int
+    user_name: typing.Optional[str]
+    user: typing.Optional[discord.User]
+    
+
+    score: float | int = 0
+
+@dataclass
+class Leaderboard():
+    all_leaderboard: list[LeaderboardEntry]
+    top10_leaderboard: list[LeaderboardEntry]
+
+    # all_leaderboard_string: str = "" # would be horrible for memory
+    top10_names_string: str = ""
+    top10_scores_string: str = ""
+
+
+class LeaderboardProcessor():
+    
+    def sort_leaderboard(self, users_and_scores: list[LeaderboardEntry]) -> Leaderboard:
+        """
+        Sorts the values into a leaderboard object (missing the `top10_*_string` variables used for discord embeds) 
+        """
+
+        all_leaderboard: list[LeaderboardEntry] = sorted(users_and_scores, key=lambda x: x.score, reverse=True)
+        top10_leaderboard: list[LeaderboardEntry] = all_leaderboard[:10]
+    
+        return Leaderboard(
+            all_leaderboard=all_leaderboard,
+            top10_leaderboard=top10_leaderboard
+        )
+
+    async def add_visualised_leaderboard(self, incomplete_leaderboard: Leaderboard, bot:commands.Bot) -> str:
+        """
+        Adds `top10_*_string` value to the Leaderboard object so that it can be used in discord embed fields.
+        """
+
+        for i, record in enumerate(incomplete_leaderboard.top10_leaderboard, start=1):
+            # Add missing values if user object is supplied
+            username = record.user_name
+            user_id = record.user_id
+            user = record.user
+            
+            if user is None:
+                user = await retrieve_user(bot, record.user_id)
+                if user:
+                    if user_id is None:
+                        user_id = user.id
+                    if username is None:
+                        username = user.name
+
+            
+
+
+        return ""
+
+    def __call__(self, users_and_scores: list[LeaderboardEntry]) -> None:
+
+
+        pass
 
 # Same as: discord.interactions.InteractionChannel (however we can't access that variable)
 AllChannelTypes = typing.Union[
@@ -570,5 +722,8 @@ def is_ticket_channel(channel: discord.TextChannel|None|AllChannelTypes):
 if __name__ == "__main__":
     db = JSONDatabase("data/main.json", "data/static/easter_eggs.json")
     db.prettifier()
-    egg = db.easter_egg(1)
-    log(egg.is_unlocked(123))
+    # egg = db.easter_egg(1)
+    # log(egg.is_unlocked(123))
+    log()
+    for egg in db.get_easter_eggs("844105597037445150"):
+        print(f"User has the easter egg: {egg.title()}")
