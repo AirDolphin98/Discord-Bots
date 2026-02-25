@@ -5,6 +5,8 @@ from discord import app_commands
 from discord.ext import tasks
 from typing import Optional
 import re
+import asyncio
+import os
 import random
 import types
 import datetime as datetime_module  # stupid aspect of datetime being also an object
@@ -19,6 +21,7 @@ from exhibition import *
 from thread_auto_manage import *
 from hall_of_fame import *
 from league_role import *
+from move_messages import *
 
 # Ensure we have a good entropy pool to get started
 random.seed(int.from_bytes(os.urandom(128), 'big'))
@@ -177,6 +180,7 @@ class ConfirmDefaultsView(discord.ui.View):
 
         async def long_add_temp(count, tenth):
             for mem in templess_mems:
+                await asyncio.sleep(RATE_LIMIT_GAP)
                 await mem.add_roles(type(self).temp)
                 count += 1
                 if count >= mem_count*(tenth+1)/10:
@@ -308,6 +312,8 @@ async def on_ready():
         forum_closer.start()
     if not auto_update_season.is_running():
         auto_update_season.start()
+    if not backup_channels.is_running():
+        backup_channels.start()
 
 
 # For persistent views

@@ -1,4 +1,5 @@
 import discord, json, random, requests, pytz, os, atexit, modals, traceback, datetime as dt
+from aiohttp.client_exceptions import ClientConnectionResetError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import Intents, app_commands
 from discord.ext import commands, tasks
@@ -2096,7 +2097,7 @@ statuses: list[tuple] = [
     (2, "10 hours of lofi music! ദ്ദി(｡•̀ ,<)~✩‧₊"),
     (2, "10 hours of metal pipes ૮₍˶Ó﹏Ò ⑅₎ა "),
     (3, 'reposts of tiktok shorts on yt shorts'),
-    (2, "to you yap"),
+    (2, "you yap"),
     (3, ["(⊙_⊙)", "(⊙_⊙)", "(> _ <)"]),
     (3, "your tabs eating up all the RAM"),
     (0, "with your mom (ᗜ⩊ᗜ)"),
@@ -2137,7 +2138,10 @@ async def status_frame_loop():
 
     # Update activity/status
     activity = discord.Activity(type=status_type, name=status_text)
-    await bot.change_presence(activity=activity)
+    try:
+        await bot.change_presence(activity=activity)
+    except ClientConnectionResetError:
+        log("[yellow i]Failed to change's bot's activity presence (ignoring)[/yellow i]")
 
 async def random_status():
     """Set's a random status that will be used by the bot!"""
@@ -2182,9 +2186,13 @@ async def set_status(interaction: discord.Interaction, status:str|None=None, sta
     activity_type = activity_types[status_type]
 
     activity = discord.Activity(type=activity_type, name=status)
-    await bot.change_presence(activity=activity)
-
-    await interaction.followup.send("Updated status!")
+    try:
+        await bot.change_presence(activity=activity)
+    except ClientConnectionResetError:
+        log("[yellow i]Failed to change's bot's activity presence (ignoring)[/yellow i]")
+        await interaction.followup.send("Failed to update status due to connection reset.")
+    else:
+        await interaction.followup.send("Updated status!")
 
 game_nights: list[GameNight] = [
     GameNight(1, ["Probability Labs", "Kitchen Cooks!", "Trash Compactor", "GIGAS -ASTRAIOS-"], 1760126040, 1760133600),
@@ -2492,7 +2500,11 @@ async def on_ready():
 
     await bot.tree.sync() # Sync tree command structure
 
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="the screams of the damned"))
+    try:
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="the screams of the damned"))
+    except ClientConnectionResetError:
+        log("[yellow i]Failed to change's bot's activity to the first presence (`the screams of the damned`) (ignoring)[/yellow i]")
+
 
     log(f"[green bold]Logged in as {bot.user}[/green bold]")
     
