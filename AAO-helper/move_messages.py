@@ -469,6 +469,7 @@ async def bulk_delete_messages(
     await interaction.followup.send(f"Successfully deleted {msgs_deleted} messages.{delete_limit_str}", ephemeral=True)
 
 
+error_spam_suppress = set()
 
 @tasks.loop(minutes=BACKUP_LOOP_MINS)
 async def backup_channels():
@@ -483,11 +484,11 @@ async def backup_channels():
         if server_comm_ch: 
             break
     async def deal_error(error_msg, src_ch_id, dest_ch_id):
-        cur.execute("DELETE FROM channel_backups WHERE src_channel_id = ? AND dest_channel_id = ?", (src_ch_id, dest_ch_id))
-        conn.commit()
-        print(f"AAO Helper: Removed the backup from channel `#{src_ch_name}` ({src_ch_id}) in server **{src_guild_name}** to channel `#{dest_ch_name}` ({dest_ch_id}) in server **{dest_guild_name}** due to error: {error_msg}")
-        if server_comm_ch:
-            await server_comm_ch.send(error_msg + "\n*This backup pipeline has been removed to prevent error spam.*")
+        if not (src_ch_id, dest_ch_id) in error_spam_suppress:
+            print(f"AAO Helper: The backup from channel `#{src_ch_name}` ({src_ch_id}) in server **{src_guild_name}** to channel `#{dest_ch_name}` ({dest_ch_id}) in server **{dest_guild_name}** raised error: {error_msg}")
+            if server_comm_ch:
+                await server_comm_ch.send(error_msg + "\n*Use `/remove_channel_backup` command to remove this backup pipeline if new channel IDs are needed to replace it.*")
+            error_spam_suppress.add((src_ch_id, dest_ch_id))
     try:
         for src_ch_id, dest_ch_id, last_msg_timestamp, last_backup_timestamp, backup_interval, channel_and_guild_names in channels_to_backup:
             src_ch = None
@@ -522,7 +523,7 @@ async def backup_channels():
             if datetime.now(timezone.utc) - datetime.fromtimestamp(last_backup_timestamp, tz=timezone.utc) < timedelta(days=backup_interval):
                 continue
             
-            
+            error_spam_suppress.discard((src_ch_id, dest_ch_id))
             messages_to_backup = [message async for message in src_ch.history(after=datetime.fromtimestamp(last_msg_timestamp, tz=timezone.utc) if last_msg_timestamp else None, oldest_first=True)]
             doing_backup = len(messages_to_backup) > 0
             if doing_backup: print(f"AAO Helper: Starting backup from channel `#{src_ch_name}` ({src_ch_id}) in server **{src_guild_name}** to channel `#{dest_ch_name}` ({dest_ch_id}) in server **{dest_guild_name}**.")
@@ -787,3 +788,11 @@ async def kill_process(interaction: discord.Interaction):
         await server_comm_ch.send(f"{interaction.user.name} issued the `/kill_process` command for moving, deleting, or backing up messages. Execution was gracefully interrupted if any such processes were running. If auto backup was interrupted, it should resume in {BACKUP_LOOP_MINS} minute{'s' if BACKUP_LOOP_MINS != 1 else ''}.")
     print(f"AAO Helper: {interaction.user.name} halted all processes for moving, deleting, or backing up messages. If auto backup was interrupted, it should resume in {BACKUP_LOOP_MINS} minute{'s' if BACKUP_LOOP_MINS != 1 else ''}.")
     await interaction.response.send_message(f"Kill signal sent. Wait {KILL_DURATION} seconds before attempting a move or delete command again. Auto backup should resume in {BACKUP_LOOP_MINS} minute{'s' if BACKUP_LOOP_MINS != 1 else ''}.", ephemeral=True)
+
+
+"""
+TODO note: In the future, may add a /backup_all_threads command. To do this, add a new database to the params file, 
+also indexed by (src_channel_id, dest_channel_id). Regularly check whether any threads in the source channel have
+been updated, and whether any new threads have been added, and back up all new messages. This should work for text 
+and forum channels, if not more. 
+"""
