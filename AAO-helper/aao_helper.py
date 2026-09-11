@@ -284,6 +284,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 @bot.event
 async def on_member_join(member: discord.Member):
+    await asyncio.sleep(4)
+    if member.id == 528417328237379584: # sekuN
+        await member.remove_roles(member.guild.get_role(943827276104097842), member.guild.get_role(711264922687897660), member.guild.get_role(874798614122234006)) # Staff, Tourney org, League org
     await asyncio.sleep(60)
     await clean_member_roles(member)
 
