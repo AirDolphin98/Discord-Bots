@@ -1466,7 +1466,7 @@ async def dump_birthday_channels_database(interaction: discord.Interaction):
         )
         return
 
-    attachment = discord.File("data/birthday_channels.json", "birthday_channels.json")
+    attachment = discord.File(abs_path_of("data/birthday_channels.json"), "birthday_channels.json")
 
     await interaction.response.send_message(
         content="Here's the birthdays_channels.json file!",
