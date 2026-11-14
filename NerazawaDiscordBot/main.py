@@ -1768,7 +1768,7 @@ async def set_birthday_channel(interaction: discord.Interaction, channel: discor
     await interaction.response.send_message(f"Birthday channel has been set to {channel.mention}!", ephemeral=True)
 
 @bot.tree.command(name="force_birthday", description="・Crapppp force a birthday if we accidentally missed it!! (Admin command)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @app_commands.describe(
     user="Who's birthday are we celebrating! o.O"
 )
