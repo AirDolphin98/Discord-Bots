@@ -676,7 +676,14 @@ def find_role(name, *, guild: discord.Guild) -> discord.Role|None:
 def has_role(role_name: str):
     async def predicate(interaction: discord.Interaction) -> bool:
         if isinstance(interaction.user, discord.Member):
-            return any(role.name == role_name for role in interaction.user.roles)
+            return any(role.id == role_name for role in interaction.user.roles)
+        return False # user was not of type discord.Member so we couldn't check there roles.
+    return discord.app_commands.check(predicate)
+
+def has_any_of_these_roles(role_names: list[str]):
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if isinstance(interaction.user, discord.Member):
+            return any(role.name in role_names for role in interaction.user.roles)
         return False # user was not of type discord.Member so we couldn't check there roles.
     return discord.app_commands.check(predicate)
 

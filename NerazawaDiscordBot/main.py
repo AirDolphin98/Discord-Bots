@@ -13,7 +13,7 @@ from jisho_api.word.request import WordRequest
 from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
-from utils import JSONDatabase, GameNight, abs_path_of, retrieve_user, VCStatType, find_role, has_role, is_authorised, command_error, find_category, find_channel, find_text_channel, is_ticket_channel, log
+from utils import JSONDatabase, GameNight, abs_path_of, retrieve_user, VCStatType, find_role, has_role, has_any_of_these_roles, is_authorised, command_error, find_category, find_channel, find_text_channel, is_ticket_channel, log
 from modals import FileSelectView
 
 with open(abs_path_of("auth.json")) as auth, \
@@ -27,6 +27,8 @@ with open(abs_path_of("auth.json")) as auth, \
     CONFIG = json.load(config)
     MAX_JISHO_RESULTS: int = CONFIG["max_jisho_results"]
     ADMIN_ROLE_NAME: str = CONFIG["staff_role"]
+    EXTRA_CONTROL_ROLE_NAMES: list[str] = CONFIG["extra_control_roles"]
+    EXTRA_CONTROL_ROLE_NAMES.extend(ADMIN_ROLE_NAME)
     DATABASE_PATH: str = abs_path_of(CONFIG["database_path"])
     DATABASE_BACKUP_DELAY_HOURS: int = CONFIG["backups_config"]["delay_hours"]
     TICKETS_CATEGORY_NAME: str = CONFIG["tickets_category_name"]
@@ -1410,7 +1412,7 @@ database_commands = app_commands.Group(name="database", description="Database co
 
 
 @database_commands.command(name="dump", description="・・Dumps the database file!")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def dump_database(interaction: discord.Interaction):
 
@@ -1442,7 +1444,7 @@ async def dump_database(interaction: discord.Interaction):
     )
 
 @database_commands.command(name="dump_birthday", description="・・Dumps the birthday_channels.json file!")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def dump_birthday_channels_database(interaction: discord.Interaction):
 
@@ -1473,7 +1475,7 @@ async def dump_birthday_channels_database(interaction: discord.Interaction):
     )
 
 @database_commands.command(name="exit_without_save", description="・・Deactivate the bot without overriding the database file!")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def exit_without_database_save(interaction: discord.Interaction):
     global save_database_on_exit
@@ -1494,7 +1496,7 @@ async def exit_without_database_save(interaction: discord.Interaction):
 
 
 @database_commands.command(name="reload", description="・・Reloads the *physical* database file into memory! Overrides the current database stored in memory.")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def reload_database(interaction: discord.Interaction):
     global save_database_on_exit
@@ -1517,7 +1519,7 @@ async def reload_database(interaction: discord.Interaction):
     )
 
 @database_commands.command(name="commit", description="・・Commits database in memory into the physical database file! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def commit_database(interaction: discord.Interaction):
     
@@ -1538,7 +1540,7 @@ async def commit_database(interaction: discord.Interaction):
 
 
 @database_commands.command(name="force_backup", description="・・Manually cause a backup of the databasess! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def force_backup_database(interaction: discord.Interaction):
     
@@ -1573,7 +1575,7 @@ async def restore_backup_callback(interaction: discord.Interaction, backup_folde
     
 
 @database_commands.command(name="restore_from_backup", description="・・Revert the current database to one of the backups! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 @app_commands.describe(
     day="The day of the backup you are trying to restore",
@@ -1648,7 +1650,7 @@ async def dump_backup_callback(interaction: discord.Interaction, backup_folder_p
 
 
 @database_commands.command(name="dump_specific_backup", description="・・Dump the contents of a specified database! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 @app_commands.describe(
     day="The day of the backup you are trying to retrieve",
@@ -2146,7 +2148,7 @@ async def autocomplete_status_types(interaction: discord.Interaction, current_st
     return [app_commands.Choice(name=s, value=s) for s in similar]
 
 @bot.tree.command(name="set_status", description="・・Set my status! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 @app_commands.describe(
     status_type="The type of Activity status that will be used!",
@@ -2218,6 +2220,7 @@ maintenance_commands = app_commands.Group(name="maintenance", description="Maint
 
 # TODO: Add a reason argument to maintenance
 @maintenance_commands.command(name="enable", description="・・Enable maintenance mode! (Authorised Users Only)")
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 # @app_commands.describe(
 #     reason="Why are we going into maintenance?"
@@ -2260,7 +2263,7 @@ Aphid & The Other Peeps ദ്ദി ˉ͈̀꒳ˉ͈́ )✧
 # @app_commands.describe(
 #     changelog="The new features added!"
 # )
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def maintenance_mode_disable(interaction: discord.Interaction):
     global maintenance_mode_active, maintenance_end_timestamp
@@ -2562,7 +2565,7 @@ async def vcleaderboard_validate_task():
         #     log(hours % 3)
         
 @bot.tree.command(name="spike_vc", description="・・For debugging VC leaderboard! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def spike_vc_debug_only_will_be_removed(interaction: discord.Interaction):
     
@@ -2583,7 +2586,7 @@ async def spike_vc_debug_only_will_be_removed(interaction: discord.Interaction):
     )
 
 @bot.tree.command(name="force_captcha", description="・・For debugging captcha system! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 async def force_captcha(interaction: discord.Interaction):
     
@@ -2608,7 +2611,7 @@ def setup_scheduler():
 
 
 @bot.tree.command(name="restart_scheduler", description="・・In case the scheduler goes offline! (Authorised Users Only)")
-@has_role(ADMIN_ROLE_NAME)
+@has_any_of_these_roles(EXTRA_CONTROL_ROLE_NAMES)
 @is_authorised(AUTHORISED_USER_IDS)
 # @app_commands.checks.cooldown(1, 10, key=lambda i: i.user.id) # Let's avoid accidentally overlapping restarts ><
 @app_commands.describe(

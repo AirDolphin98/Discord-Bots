@@ -2,6 +2,9 @@
     "database_path": "./data/main.json",
     "max_jisho_results": 3,
     "staff_role": "Lop",
+    "extra_control_roles": [
+        "Helpful Bun (Contributor)"
+    ],
     "backups_config": {
         "delay_hours": 3.0
     },
