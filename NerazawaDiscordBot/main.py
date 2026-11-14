@@ -28,7 +28,7 @@ with open(abs_path_of("auth.json")) as auth, \
     MAX_JISHO_RESULTS: int = CONFIG["max_jisho_results"]
     ADMIN_ROLE_NAME: str = CONFIG["staff_role"]
     EXTRA_CONTROL_ROLE_NAMES: list[str] = CONFIG["extra_control_roles"]
-    EXTRA_CONTROL_ROLE_NAMES.extend(ADMIN_ROLE_NAME)
+    EXTRA_CONTROL_ROLE_NAMES.append(ADMIN_ROLE_NAME)
     DATABASE_PATH: str = abs_path_of(CONFIG["database_path"])
     DATABASE_BACKUP_DELAY_HOURS: int = CONFIG["backups_config"]["delay_hours"]
     TICKETS_CATEGORY_NAME: str = CONFIG["tickets_category_name"]
@@ -948,7 +948,7 @@ async def autocomplete_timezones(interaction: discord.Interaction, current_strin
         tz for tz in pytz.all_timezones if current_string in tz.lower().strip()
     ]
     # Discord only allows 25 suggestions at max
-    similar = similar[:25] 
+    similar = similar[:25]
     return [app_commands.Choice(name=tz, value=tz) for tz in similar]
 
 @bot.tree.command(name="timelord", description="Found out what time it is everywhere else!")
@@ -1694,8 +1694,6 @@ async def dump_specific_backup(interaction: discord.Interaction, day:int, month:
 
 bot.tree.add_command(database_commands)
 
-
-
 @bot.tree.command(name="set_birthday", description="Set your birthday so that we can wish you a happy birthday when it happens!")
 @app_commands.describe(
     day="The day you were born!", 
@@ -1703,6 +1701,7 @@ bot.tree.add_command(database_commands)
     timezone="Your timezone! E.g. `Asia/Tokyo`!",
     silent="If your concerned about leaking your timezone use this! It will whisper the message."
 )
+@app_commands.autocomplete(timezone=autocomplete_timezones)
 async def set_birthday(interaction: discord.Interaction, day: int, month: int, timezone: str, silent: bool=False):
     await interaction.response.defer(ephemeral=silent)
     if maintenance_mode_active:
@@ -2626,7 +2625,7 @@ async def restart_scheduler(interaction: discord.Interaction, wait:bool=True):
 
     if scheduler.running:
         log(f"Scheduler restart status: Shutting down scheduler... (Waiting for tasks to complete: {wait})")
-        await interaction.followup.send(content=f"Restarting scheduler... (Waiting for tasks to complete: {wait})", ephemeral=True)
+        await interaction.followup.send(content=f"Restarting scheduler... (Waiting for tasks to complete: {wait})")
         scheduler.shutdown(wait=wait)
         log(f"Scheduler restart status: Scheduler shutdown!")
 
@@ -2639,7 +2638,7 @@ async def restart_scheduler(interaction: discord.Interaction, wait:bool=True):
     setup_scheduler()
     scheduler.start()
     log(f"Scheduler restart status: Restarted! The scheduler should now be online. (Scheduler state: {scheduler.state})'")
-    await interaction.followup.send(content=f'Restarted! The scheduler should now be online. (Scheduler state: {scheduler.state})', ephemeral=True)
+    await interaction.followup.send(content=f'Restarted! The scheduler should now be online. (Scheduler state: {scheduler.state})')
 
 
 
