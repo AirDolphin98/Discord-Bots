@@ -1,6 +1,7 @@
 import discord, json, random, requests, pytz, os, atexit, modals, traceback, datetime as dt
 from aiohttp.client_exceptions import ClientConnectionResetError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.events import EVENT_JOB_MISSED
 from discord import Intents, app_commands
 from discord.ext import commands, tasks
 from collections import defaultdict
@@ -12,7 +13,7 @@ from jisho_api.word.request import WordRequest
 from jisho_api.sentence import Sentence
 from jisho_api.kanji import Kanji
 from jisho_api.word import Word
-from utils import JSONDatabase, GameNight, abs_path_of, retrieve_user, VCStatType, find_role, has_role, command_error, find_category, is_ticket_channel, log
+from utils import JSONDatabase, GameNight, abs_path_of, retrieve_user, VCStatType, find_role, has_role, is_authorised, command_error, find_category, find_channel, find_text_channel, is_ticket_channel, log
 from modals import FileSelectView
 
 with open(abs_path_of("auth.json")) as auth, \
@@ -31,10 +32,15 @@ with open(abs_path_of("auth.json")) as auth, \
     TICKETS_CATEGORY_NAME: str = CONFIG["tickets_category_name"]
     ARCHIVED_TICKETS_CATEGORY_NAME: str = CONFIG["archived_tickets_category_name"]
     
+    CAPTCHA_CHANNEL_NAME = CONFIG["vc_validation_check_config"]["captcha_channel_name"]
+    VC_VALIDATION_CHECK_DELAY_HOURS = CONFIG["vc_validation_check_config"]["delay_hours"]
+
     EASTER_EGGS_DATABASE_PATH = abs_path_of(CONFIG["easter_eggs_database_path"])
     del CONFIG
 
     birthday_channel_ids = json.load(birthdays)
+
+AUTHORISED_USER_IDS = [969779384691093575, 286634836444315648, 1284946570667626610] # Always good to hardcode important values mhmhm
 
 DATABASE = JSONDatabase(DATABASE_PATH, EASTER_EGGS_DATABASE_PATH)
 
@@ -79,11 +85,34 @@ if os.path.exists(MAINTENANCE_FILE_PATH):
 # MISC FUNCTIONS
 ################################################
 
+def get_seconds_in_vc_now(original_start_time:datetime, start_time_since_last_call:datetime):
+    """
+    Returns the total seconds in the VC, as well as the seconds since the last `update_vc_times` call, for the given times!
+    """
+    now_timestamp = datetime.now(dt.timezone.utc)
+
+    difference_since_start = now_timestamp - original_start_time
+    difference_since_last_call = now_timestamp - start_time_since_last_call
+    
+    seconds_in_vc_since_start = difference_since_start.total_seconds()
+    seconds_in_vc_since_last_call = difference_since_last_call.total_seconds()
+
+    return seconds_in_vc_since_start, seconds_in_vc_since_last_call
+
+def get_seconds_in_vc_now_from_member_vc_time(member_vc_time: dict[str, datetime]):
+    """
+    Returns the total seconds in the VC, as well as the seconds since the last `update_vc_times` call, for the given member!
+    """
+    original_start_time: datetime = member_vc_time["original_start_time"] # When they first entered the VC
+    start_time_since_last_call: datetime = member_vc_time["start_time_since_last_call"]  # Updates everytime `update_vc_times` is called during backups, etc
+
+    seconds_in_vc_since_start, seconds_in_vc_since_last_call = get_seconds_in_vc_now(original_start_time, start_time_since_last_call)
+    return seconds_in_vc_since_start, seconds_in_vc_since_last_call
+
 def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bool=False) -> dict|None:
     """
     Note: Set remove_from_dict to TRUE if the member is leaving, or is assumed to have left - in the case of the bot going offline
     """
-    
     global member_vc_times
     now_timestamp = datetime.now(dt.timezone.utc)
 
@@ -95,24 +124,18 @@ def update_vc_times(*, specific_member_id: int|None = None, remove_from_dict: bo
 
         data = member_vc_times.pop(member_id)
         original_start_time: datetime = data["original_start_time"] # When they first entered the VC
-        start_time_since_last_call: datetime = data["start_time_since_last_call"]  # Updates everytime `update_vc_times` is called during backups, etc
         channel_id: int = data["channel_id"]
 
         log(f"[red bold]Channel ID: {channel_id}[/red bold]")
         
-        difference_since_start = now_timestamp - original_start_time
-        difference_since_last_call = now_timestamp - start_time_since_last_call
-        
-        seconds_in_vc_since_start = difference_since_start.total_seconds()
-        seconds_in_vc_since_last_call = difference_since_last_call.total_seconds()
-        
+        seconds_in_vc_since_start, seconds_in_vc_since_last_call = get_seconds_in_vc_now_from_member_vc_time(data)
+
         DATABASE.new_vc_duration(
             member_id, channel_id, 
             seconds_in_vc_since_start=seconds_in_vc_since_start,
             seconds_in_vc_since_last_call=seconds_in_vc_since_last_call,
             update_total=True, update_longest_consecutive=True
         )
-
 
         if remove_from_dict:
             log(f"[green]User {member_id} left VC. Consecutive: {seconds_in_vc_since_start:.1f}s, Added to total: {seconds_in_vc_since_last_call:.1f}s[/green]")
@@ -329,7 +352,7 @@ async def ping(interaction: discord.Interaction):
         await interaction.response.send_message('Pong! :ping_pong:')
 
 
-@bot.tree.command(name="warn", description="Warns a user in a pretty little embed!")
+@bot.tree.command(name="warn", description="・Warns a user in a pretty little embed! (Admin command)")
 @has_role(ADMIN_ROLE_NAME)
 @app_commands.describe(
     member="The member to warn.",
@@ -352,7 +375,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
 
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="cleanup", description="Deletes up to 50 messages in this channel. Hard cap to prevent misuse.")
+@bot.tree.command(name="cleanup", description="・Deletes up to 50 messages in this channel. Hard cap to prevent misuse. (Admin command)")
 @has_role(ADMIN_ROLE_NAME)
 @app_commands.checks.cooldown(1, 3, key=lambda i: i.user.id)
 @app_commands.describe(
@@ -759,7 +782,7 @@ async def todaysbunny(interaction: discord.Interaction):
     embed = discord.Embed(title="Daily Bunnies", color=discord.Colour.green(), description=f"Couldn't collect the bunny today (ó﹏ò｡)")
     await interaction.followup.send(embed=embed)
 
-@bot.tree.command(name="embedui", description="Create embeds quickly in the comfort of a UI!")
+@bot.tree.command(name="embedui", description="・Create embeds quickly in the comfort of a UI! (Admin command)")
 @has_role(ADMIN_ROLE_NAME)
 @app_commands.describe(
     include_images="Let you fill out the images!",
@@ -831,7 +854,7 @@ async def embedui(interaction: discord.Interaction, include_images: bool, includ
 
 
 
-@bot.tree.command(name="embed", description="Create embed messages automatically & without code!")
+@bot.tree.command(name="embed", description="・Create embed messages automatically & without code! (Admin command)")
 @has_role(ADMIN_ROLE_NAME) # NOTE: Has to be a staff for the time being due to embeds being harder to filter - e.g. it could be misused to send NSFW images or banned words in the embed (I believe)
 @app_commands.describe(
     title="Title",
@@ -1069,7 +1092,7 @@ commands_and_meanings = {
     "/ticket cancel": "Close a ticket if you changed your mind!",
     "/maintenance description": "Confused on what maintenance mode is? Run this command for a (hopefully) detailed description :3",
 
-    # Moderator Commands
+    # Moderator Commands (・)
     "/ticket resolve": "Close a ticket and mark as resolved! ***(Moderator Command)***",
     "/ticket abandon": "*Delete* a ticket without resolving! ***(Moderator Command)***",
     "/cleanup `amount`": "A command to help mass delete messages! ***(Moderator Command)***",
@@ -1078,11 +1101,13 @@ commands_and_meanings = {
     "/userinfo `member`": "Don't worry boss I'm ready to collect the intel! ***(Moderator Command)***",
     "/set_birthday_channel `channel`": "Set where the birthday embeds will appear for users! ***(Moderator Command)***",
     "/warn `member` `reason`": "Warns the given discord member so they don't make the same mistake again! ***(Moderator Command)***",
+    "/force_birthday `user`": "Creates the birthday message if we missed them by accident!! ***(Moderator Command)***",
     
-    # Authorised Users
+    # Authorised Users (・・)
     "|| /database `sub_command` ||": "|| ***(Authorised Users Command) *** ||",
     "|| /set_status `status` `status_type` ||": "|| ***(Authorised Users Command) *** ||",
     "|| /maintenance `sub_command (ex. description)` ||": "|| ***(Authorised Users Command) *** ||",
+    "|| /restart_scheduler `wait` ||": "|| ***(Authorised Users Command) *** ||",
 }
 
 @bot.tree.command(name="help", description="I bet your a little confused on how I work aren't you!")
@@ -1339,7 +1364,7 @@ async def easter_egg_leaderboard(interaction: discord.Interaction):
 
 
 
-@bot.tree.command(name="userinfo", description="The ultimate lurker tool.")
+@bot.tree.command(name="userinfo", description="・The ultimate lurker tool. (Admin command)")
 @has_role(ADMIN_ROLE_NAME)
 @app_commands.describe(
     member="The member to check"
@@ -1384,18 +1409,10 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member):
 database_commands = app_commands.Group(name="database", description="Database commands")
 
 
-@database_commands.command(name="dump", description="Dumps the database file! Authorised users only >:L")
+@database_commands.command(name="dump", description="・・Dumps the database file!")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 async def dump_database(interaction: discord.Interaction):
-    
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    
-    if not verified_user:
-        await interaction.response.send_message(
-            "Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
 
     if not os.path.exists(DATABASE_PATH):
         await interaction.response.send_message(
@@ -1424,18 +1441,10 @@ async def dump_database(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@database_commands.command(name="dump_birthday", description="Dumps the birthday_channels.json file! Authorised users only >:L")
+@database_commands.command(name="dump_birthday", description="・・Dumps the birthday_channels.json file!")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 async def dump_birthday_channels_database(interaction: discord.Interaction):
-    
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    
-    if not verified_user:
-        await interaction.response.send_message(
-            "Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
 
     if not os.path.exists(DATABASE_PATH):
         await interaction.response.send_message(
@@ -1463,19 +1472,11 @@ async def dump_birthday_channels_database(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@database_commands.command(name="exit_without_save", description="Deactivate the bot without overriding the database file! WARNING DANGEROUS IF MISUSED!")
+@database_commands.command(name="exit_without_save", description="・・Deactivate the bot without overriding the database file!")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 async def exit_without_database_save(interaction: discord.Interaction):
     global save_database_on_exit
-
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    
-    if not verified_user:
-        await interaction.response.send_message(
-            "Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
 
     log(f"{interaction.user.name} is exiting the bot without saving through a command!")
     
@@ -1492,20 +1493,13 @@ async def exit_without_database_save(interaction: discord.Interaction):
     await bot.close()
 
 
-@database_commands.command(name="reload", description="Reloads the *physical* database file into memory! Override the current database stored in memory.")
+@database_commands.command(name="reload", description="・・Reloads the *physical* database file into memory! Overrides the current database stored in memory.")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 async def reload_database(interaction: discord.Interaction):
     global save_database_on_exit
 
     await interaction.response.defer(ephemeral=True)
-
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    if not verified_user:
-        await interaction.followup.send(
-            content="Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
 
     log(f"{interaction.user.name} is force reloading the database through a command!")
     await interaction.followup.send(
@@ -1522,19 +1516,12 @@ async def reload_database(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@database_commands.command(name="commit", description="Commits database in memory into the physical database file!")
+@database_commands.command(name="commit", description="・・Commits database in memory into the physical database file! (Authorised Users Only)")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 async def commit_database(interaction: discord.Interaction):
     
     await interaction.response.defer(ephemeral=True)
-
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    if not verified_user:
-        await interaction.followup.send(
-            content="Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
     
     log(f"{interaction.user.name} is force committing the database through a command!")
     DATABASE.commit()
@@ -1550,20 +1537,12 @@ async def commit_database(interaction: discord.Interaction):
     )
 
 
-@database_commands.command(name="force_backup", description="Manually cause a backup of the databasess!")
+@database_commands.command(name="force_backup", description="・・Manually cause a backup of the databasess! (Authorised Users Only)")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 async def force_backup_database(interaction: discord.Interaction):
     
     await interaction.response.defer(ephemeral=True)
-
-
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    if not verified_user:
-        await interaction.followup.send(
-            content="Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
 
     log(f"{interaction.user.name} is forcing a backup through a command!")
     DATABASE.backup()
@@ -1593,8 +1572,9 @@ async def restore_backup_callback(interaction: discord.Interaction, backup_folde
     )
     
 
-@database_commands.command(name="restore_from_backup", description="Revert the current database to one of the backups!")
+@database_commands.command(name="restore_from_backup", description="・・Revert the current database to one of the backups! (Authorised Users Only)")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 @app_commands.describe(
     day="The day of the backup you are trying to restore",
     month="The month of the backup you are trying to restore",
@@ -1604,13 +1584,6 @@ async def restore_from_backup(interaction: discord.Interaction, day:int, month:i
     
     await interaction.response.defer(ephemeral=True)
 
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    if not verified_user:
-        await interaction.followup.send(
-            content="Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
     log(f"{interaction.user.name} is restoring the database from a backup through a command!")
 
     month_str = f"0{month}" if len(str(month)) == 1 else f"{month}"
@@ -1674,8 +1647,9 @@ async def dump_backup_callback(interaction: discord.Interaction, backup_folder_p
     )
 
 
-@database_commands.command(name="dump_specific_backup", description="Dump the contents of a specified database! (Authorised Users Only!)")
+@database_commands.command(name="dump_specific_backup", description="・・Dump the contents of a specified database! (Authorised Users Only)")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 @app_commands.describe(
     day="The day of the backup you are trying to retrieve",
     month="The month of the backup you are trying to retrieve",
@@ -1684,14 +1658,6 @@ async def dump_backup_callback(interaction: discord.Interaction, backup_folder_p
 async def dump_specific_backup(interaction: discord.Interaction, day:int, month:int, year:int):
     
     await interaction.response.defer(ephemeral=True)
-
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    if not verified_user:
-        await interaction.followup.send(
-            content="Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
 
     month_str = f"0{month}" if len(str(month)) == 1 else f"{month}"
     day_str = f"0{day}" if len(str(day)) == 1 else f"{day}"
@@ -1787,7 +1753,7 @@ async def set_birthday(interaction: discord.Interaction, day: int, month: int, t
         await interaction.followup.send(content="Can't wait to have fun on your birthday (˶˃ᵕ˂˶)!", ephemeral=silent)
 
 # TODO: ADD SOME SORT OF EASTER EGG!
-@bot.tree.command(name="set_birthday_channel", description="Set which channel the birthday messages will appear!")
+@bot.tree.command(name="set_birthday_channel", description="・Set which channel the birthday messages will appear! (Admin command)")
 @has_role(ADMIN_ROLE_NAME)
 @app_commands.describe(
     channel="The birthday channel!"
@@ -1799,6 +1765,15 @@ async def set_birthday_channel(interaction: discord.Interaction, channel: discor
     with open(abs_path_of("data/birthday_channels.json"), "w") as f:
         json.dump(birthday_channel_ids, f, indent=4)
     await interaction.response.send_message(f"Birthday channel has been set to {channel.mention}!", ephemeral=True)
+
+@bot.tree.command(name="force_birthday", description="・Crapppp force a birthday if we accidentally missed it!! (Admin command)")
+@has_role(ADMIN_ROLE_NAME)
+@app_commands.describe(
+    user="Who's birthday are we celebrating! o.O"
+)
+async def force_birthday(interaction: discord.Interaction, user: discord.User):
+    await send_birthday_message_in_all_guilds(user)
+    await interaction.response.send_message(f"Birthday message sent for `{user.name}#{user.discriminator}`!", ephemeral=True)
 
 ticket_commands = app_commands.Group(name="ticket", description="Ticket commands")
 
@@ -1867,6 +1842,11 @@ async def ticket_create(interaction: discord.Interaction, title: str, descriptio
     #### FIND OR CREATE TICKET CATEGORY
 
     tickets_category = await find_category(TICKETS_CATEGORY_NAME, interaction.guild)
+
+    if tickets_category is None:
+        log(f"[red]Failed to find ticket category ({TICKETS_CATEGORY_NAME}) in server![/red]")
+        await interaction.followup.send(f"Could not find ticket's category to put ticket in (Category name: {TICKETS_CATEGORY_NAME})! \nPlease report this to the staff for fixing, thanks!", ephemeral=True)
+        return
 
     channel = await tickets_category.create_text_channel(
         name=f"ticket-{member.name}-{title}", # ticket-CREATORNAME-TITLE
@@ -2165,8 +2145,9 @@ async def autocomplete_status_types(interaction: discord.Interaction, current_st
     similar = similar[:25]
     return [app_commands.Choice(name=s, value=s) for s in similar]
 
-@bot.tree.command(name="set_status", description="Set my status! (Authorised Users Only)")
+@bot.tree.command(name="set_status", description="・・Set my status! (Authorised Users Only)")
 @has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 @app_commands.describe(
     status_type="The type of Activity status that will be used!",
     status="The thing I am thinking or doing!"
@@ -2174,14 +2155,6 @@ async def autocomplete_status_types(interaction: discord.Interaction, current_st
 @app_commands.autocomplete(status_type=autocomplete_status_types)
 async def set_status(interaction: discord.Interaction, status:str|None=None, status_type: str|None="playing"):
     await interaction.response.defer(ephemeral=True)
-
-    verified_user = interaction.user.id in [969779384691093575, 286634836444315648, 1284946570667626610]
-    if not verified_user:
-        await interaction.followup.send(
-            content="Sorry but only specific users can use this command!",
-            ephemeral=True
-        )
-        return
 
     activity_type = activity_types[status_type]
 
@@ -2244,12 +2217,15 @@ async def gamenight(interaction: discord.Interaction):
 maintenance_commands = app_commands.Group(name="maintenance", description="Maintance commands")
 
 # TODO: Add a reason argument to maintenance
-@maintenance_commands.command(name="enable", description="Enable maintenance mode! (Authorised Users Only)")
+@maintenance_commands.command(name="enable", description="・・Enable maintenance mode! (Authorised Users Only)")
+@is_authorised(AUTHORISED_USER_IDS)
 # @app_commands.describe(
 #     reason="Why are we going into maintenance?"
 # )
+@has_role(ADMIN_ROLE_NAME)
 async def maintenance_mode_enable(interaction: discord.Interaction):
     global maintenance_mode_active, maintenance_start_timestamp
+
     await interaction.response.defer()
 
     maintenance_mode_active = True
@@ -2280,12 +2256,15 @@ Aphid & The Other Peeps ദ്ദി ˉ͈̀꒳ˉ͈́ )✧
     await interaction.followup.send(embed=embed)
 
 # TODO: Add a change log argument
-@maintenance_commands.command(name="disable", description="Disables maintenance mode! (Authorised Users Only)")
+@maintenance_commands.command(name="disable", description="・・Disables maintenance mode! (Authorised Users Only)")
 # @app_commands.describe(
 #     changelog="The new features added!"
 # )
+@has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
 async def maintenance_mode_disable(interaction: discord.Interaction):
     global maintenance_mode_active, maintenance_end_timestamp
+
     await interaction.response.defer()
 
     if maintenance_mode_active == False or maintenance_start_timestamp is None:
@@ -2429,28 +2408,36 @@ async def on_message(message: discord.Message):
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     error_traceback = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+
     if isinstance(error, app_commands.errors.CommandOnCooldown):
-        await interaction.response.send_message(f"**Please be patient! This command is on cooldown for another " + str("%.2f" % error.retry_after) + " seconds!**", 
-                                                ephemeral=True) 
+        response_message = f"**Please be patient! This command is on cooldown for another " + str("%.2f" % error.retry_after) + " seconds!**"
+        ephemeral = True
 
     elif isinstance(error, app_commands.errors.CheckFailure):
-        await interaction.response.send_message(f"**You seem to be missing something to run this command! Maybe you don't have the required role or permissions?**",
-                       ephemeral=True)
+        response_message = f"**You seem to be missing something to run this command! Maybe you don't have the required role or permissions?**"
+        ephemeral = True
 
     else:
         log(f"[red bold]A error of type `{type(error)}` occurred![/red bold] Error: {error} | Traceback:\n{error_traceback}")
-        censored_error = str(error).replace(TOKEN, "REDACTED") # In case the error for some reason includes the token 💀
+
+        censored_error = str(error)
+        #censored_error = str(error).replace(TOKEN, "REDACTED") # In case the error for some reason includes the token 💀
+        if TOKEN.lower() in str(error).lower():
+            censored_error = "Cannot display error due to it containing senstive information."
+            log("An error occurred! However it cannot be sent in the discord due to it containing the TOKEN for some reason!! So here it is: ", str(error))
         
         await found_easter_egg(interaction.user, easter_egg_id=18)
-        
-        try:
-            await interaction.response.send_message(
-                f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
-            )
-        except discord.errors.InteractionResponded:
-            await interaction.followup.send(
-                f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**",
-            )
+
+        response_message = f"**Opps! An error occurred while I tried to process that!\nError: {censored_error}**"
+        ephemeral = False
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(content=response_message, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(content=response_message, ephemeral=ephemeral)
+    except discord.NotFound:
+        log(f"Failed to send error into channel as the interaction cannot be found. Message we were trying to send: {response_message}")
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
@@ -2493,6 +2480,170 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
         DATABASE.commit()
 
+captcha_intro_phrases = [
+    "Hiya! ",
+    "After discussing with the council we have come to the conclusion that we *doubt* you're even actually active in VC."
+]
+
+async def captcha(user_id:int):
+    """
+    ### THIS FUNCTION IS INCOMPLETE AND UNUSED
+
+    The idea was for this function to be activated within `vcleaderboard_validate_task()` after X amount of hours of a user being in VC
+    the user would have to complete some task - that should be silly - to show that they are still around and not just farming the VCLeaderboard
+    """
+    try:
+        user = await bot.fetch_user(user_id)
+    except discord.NotFound:
+        log(f"[yellow bold]Could not find user by id {user_id} for captcha!")
+        return
+
+    log(f"[blue]Creating captcha for user: {user.name} ({user_id})[/blue]")
+
+
+    dm_channel = user.dm_channel
+    if dm_channel is None:
+        dm_channel = await user.create_dm()
+
+    # captcha_channel = find_text_channel(CAPTCHA_CHANNEL_NAME, guild)
+    captcha_channel = dm_channel
+
+    embed = discord.Embed(
+        color=0x9B59B6,
+        title="👁️ VC Captcha! (Please respond!)",
+        description=(
+            f"{random.choice(captcha_intro_phrases)}"
+            ""
+            ""
+            "So! Please complete the following captcha otherwise I will kick ya from the vc."
+            "Just don't want peeps farming VC hours on the leaderboard."
+        )
+    )
+
+    embed.add_field(
+        name="⏳ Timeframe!",
+        value=(
+            "The clocks ticking! You have ***10 minutes*** to respond."
+        ),
+        inline=False
+    )
+
+    # embed.add_field(
+    #     name="Captcha:",
+    #     value="Type the following phrase *with* a typo to prove that you are human. \n{phrase}"
+    # )
+
+    embed.set_footer(text="❔This is to stop people farming time on the vcleaderboard")
+
+    await captcha_channel.send(embed=embed)
+
+
+async def vcleaderboard_validate_task():
+    """
+    Double checks the users that have been in a VC for a reallllyy long time to make sure they're not just AFK/asleep farming stats
+    """
+    log("Checking VC peeps!")
+    if len(member_vc_times) == 0:
+        log("No peeps to check!")
+        return
+
+    for member_id, vc_time_data in member_vc_times.items():
+        log("Checking:", member_id)
+        total_seconds, _ = get_seconds_in_vc_now_from_member_vc_time(vc_time_data)
+        total_minutes = total_seconds / 60
+        total_hours = total_minutes / 60
+        
+        minutes, seconds = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+
+        # if total_hours >= 3:
+        #     log(f"AAAAA! Validation needed for user {member_id}!")
+        #     await captcha(member_id)
+        #     log(hours % 3)
+        
+@bot.tree.command(name="spike_vc", description="・・For debugging VC leaderboard! (Authorised Users Only)")
+@has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
+async def spike_vc_debug_only_will_be_removed(interaction: discord.Interaction):
+    
+    await interaction.response.defer()
+    
+    user_id = interaction.user.id
+
+    if user_id not in member_vc_times:
+        await interaction.followup.send("You ain't in a VC bro!")
+        return
+
+    # Add one hour to the time
+    member_vc_times[user_id]["original_start_time"] -= timedelta(hours=1)
+    member_vc_times[user_id]["start_time_since_last_call"] -= timedelta(hours=1)
+
+    await interaction.followup.send(
+        content="Let's GOOOOOOOO!!! Time to bump up these numbers!!"
+    )
+
+@bot.tree.command(name="force_captcha", description="・・For debugging captcha system! (Authorised Users Only)")
+@has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
+async def force_captcha(interaction: discord.Interaction):
+    
+    await interaction.response.defer()
+
+    await captcha(interaction.user.id)
+
+    await interaction.followup.send("Finished captcha!")
+
+def missed_scheduler_job_listener(event):
+    global scheduler
+    log("Missed scheduled job:", event)    
+
+def setup_scheduler():
+    global scheduler
+    scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
+    scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
+    scheduler.add_job(random_status, 'interval', minutes=random.randint(20, 25)) # Change to new status after a while
+    scheduler.add_job(status_frame_loop, 'interval', seconds=10) # Animated status handling!
+    scheduler.add_job(vcleaderboard_validate_task, 'interval', hours=VC_VALIDATION_CHECK_DELAY_HOURS)
+    scheduler.add_listener(missed_scheduler_job_listener, EVENT_JOB_MISSED)
+
+
+@bot.tree.command(name="restart_scheduler", description="・・In case the scheduler goes offline! (Authorised Users Only)")
+@has_role(ADMIN_ROLE_NAME)
+@is_authorised(AUTHORISED_USER_IDS)
+# @app_commands.checks.cooldown(1, 10, key=lambda i: i.user.id) # Let's avoid accidentally overlapping restarts ><
+@app_commands.describe(
+    wait="Whether this command should wait for all current jobs to finish before restarting"
+)
+async def restart_scheduler(interaction: discord.Interaction, wait:bool=True):
+    global scheduler
+
+    await interaction.response.defer()
+
+    log(f"User ({interaction.user.name}#{interaction.user.discriminator}) initiated scheduler restart!")
+
+    if scheduler.running:
+        log(f"Scheduler restart status: Shutting down scheduler... (Waiting for tasks to complete: {wait})")
+        await interaction.followup.send(content=f"Restarting scheduler... (Waiting for tasks to complete: {wait})", ephemeral=True)
+        scheduler.shutdown(wait=wait)
+        log(f"Scheduler restart status: Scheduler shutdown!")
+
+    log(f"Scheduler restart status: Removing all jobs...")
+    scheduler.remove_all_jobs()
+    log(f"Scheduler restart status: Removed all jobs!")
+
+    log(f"Scheduler restart status: Restarting scheduler...")
+    scheduler = AsyncIOScheduler()
+    setup_scheduler()
+    scheduler.start()
+    log(f"Scheduler restart status: Restarted! The scheduler should now be online. (Scheduler state: {scheduler.state})'")
+    await interaction.followup.send(content=f'Restarted! The scheduler should now be online. (Scheduler state: {scheduler.state})', ephemeral=True)
+
+
+
+# Source - https://stackoverflow.com/a/50862996
+# Posted by Alex Grönholm
+# Retrieved 2026-11-14, License - CC BY-SA 4.0
+
 
 @bot.event
 async def on_ready():
@@ -2508,12 +2659,12 @@ async def on_ready():
 
     log(f"[green bold]Logged in as {bot.user}[/green bold]")
     
-    scheduler.add_job(check_bdays, 'interval', minutes=10)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
-    scheduler.add_job(backup_task, 'interval', hours=DATABASE_BACKUP_DELAY_HOURS)  # Run every 10minutes - there is a ten minute window between 9-9:10AM for wishing happy birthday (in their local time)
-    scheduler.add_job(random_status, 'interval', minutes=random.randint(20, 25)) # Change to new status after a while
-    scheduler.add_job(status_frame_loop, 'interval', seconds=10) # Animated status handling!
-    scheduler.start()
-    
+    if not scheduler.running:
+        setup_scheduler()
+        scheduler.start()
+    else:
+        log("Scheduler already running! Donnnn'tt run it again! - Maybe the bot restarted? So that's why the on_ready function and this is being re-run?")
+
     await random_status()
 
     log("Scheduler setup!")
@@ -2521,6 +2672,7 @@ async def on_ready():
     await check_bdays()
     await add_missing_vc_people()
     await backup_task()
+    await vcleaderboard_validate_task()
 
 # Run bot
 bot.run(TOKEN)

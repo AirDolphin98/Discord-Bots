@@ -539,6 +539,8 @@ class EasterEgg():
             case "message":
                 self.mentions = egg_data["mentions"]
                 self.name_ = f"Requires to mention `{', '.join(self.mentions)}`."
+            case "error":
+                self.name_ = "Related to causing errors in the bot."
                 
     def name(self) -> str:
         return self.name_
@@ -678,6 +680,14 @@ def has_role(role_name: str):
         return False # user was not of type discord.Member so we couldn't check there roles.
     return discord.app_commands.check(predicate)
 
+def is_authorised(authorised_user_ids):
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if isinstance(interaction.user, discord.Member) or isinstance(interaction.user, discord.User):
+            return interaction.user.id in authorised_user_ids
+        return False
+    return discord.app_commands.check(predicate)
+
+
 async def command_error(reason: str, *, interaction: discord.Interaction, followup=False):
 
     description = "There was an error running the given command."
@@ -702,6 +712,20 @@ async def find_category(name, guild: discord.Guild) -> discord.CategoryChannel:
         log("Created missing tickets category!")
     
     return tickets_category
+
+async def find_channel(name, guild: discord.Guild) -> discord.guild.GuildChannel:
+    channel = next(
+        (c for c in guild.channels if c.name == name)
+    )
+
+    return channel
+
+async def find_text_channel(name, guild: discord.Guild) -> discord.TextChannel:
+    channel = next(
+        (c for c in guild.channels if c.name == name and isinstance(c, discord.TextChannel))
+    )
+
+    return channel
 
 def is_ticket_channel(channel: discord.TextChannel|None|AllChannelTypes):
     if not isinstance(channel, discord.TextChannel) or channel is None:
