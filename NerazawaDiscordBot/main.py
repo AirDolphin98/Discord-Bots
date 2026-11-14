@@ -2224,7 +2224,6 @@ maintenance_commands = app_commands.Group(name="maintenance", description="Maint
 # @app_commands.describe(
 #     reason="Why are we going into maintenance?"
 # )
-@has_role(ADMIN_ROLE_NAME)
 async def maintenance_mode_enable(interaction: discord.Interaction):
     global maintenance_mode_active, maintenance_start_timestamp
 
