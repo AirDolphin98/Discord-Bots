@@ -3,9 +3,14 @@
     "max_jisho_results": 3,
     "staff_role": "Lop",
     "backups_config": {
-        "delay_hours": 3
+        "delay_hours": 3.0
     },
     "tickets_category_name": "tickets",
     "archived_tickets_category_name": "completed_tickets",
-    "easter_eggs_database_path": "./data/static/easter_eggs.json"
+    "easter_eggs_database_path": "./data/static/easter_eggs.json",
+
+    "vc_validation_check_config": {
+        "captcha_channel_name": "bot",
+        "delay_hours": 3.0
+    }
 }
